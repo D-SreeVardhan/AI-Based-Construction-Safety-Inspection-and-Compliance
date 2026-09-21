@@ -1,0 +1,58 @@
+# Local editor / agent config
+.cursor/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Datasets and derived media — tens of GB; fetch locally via tools/
+data/external/
+data/working/
+data/cache/
+data/source/*
+!data/source/.gitkeep
+!data/source/README.md
+
+# Runtime output
+output/*
+!output/.gitkeep
+data/incidents.db
+evidence/
+*.partial
+
+# Model weights and trained adapters
+models/
+artifacts/models/
+artifacts/checkpoints/
+artifacts/adapters/
+llm/adapters/**
+!llm/adapters/.gitkeep
+
+# Media stays local
+*.mp4
+*.mov
+*.mkv
+*.avi
+!tests/fixtures/**/*.mp4
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,59 @@
+[project]
+name = "construction-safety-twin"
+version = "0.1.0"
+description = "Offline construction-safety video analysis with a 2.5D situational twin"
+readme = "README.md"
+license = { text = "AGPL-3.0-or-later" }
+requires-python = ">=3.11,<3.12"
+dependencies = [
+  "pydantic>=2.12,<3",
+  "pyyaml>=6,<7",
+  "rich>=14,<15",
+  "typer>=0.16,<1",
+]
+
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app", "jobs", "pipeline", "twin", "shared", "llm", "tools", "evaluation"]
+
+# Vision/LLM extras (torch, ultralytics, mlx) are added when those stages land.
+# Pin set is specified in docs/plan/construction-safety-2.5d-twin-plan-v7.md §28.2.
+[project.optional-dependencies]
+report = [
+  "pandas>=2.2,<3",
+  "pyarrow>=17,<23",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.4,<9",
+  "pytest-cov>=7,<8",
+  "ruff==0.14.4",
+  "types-pyyaml>=6,<7",
+]
+
+[project.scripts]
+safety-twin = "app.__main__:main"
+safety-tools = "tools.cli:main"
+safety-llm = "llm.cli:main"
+safety-eval = "evaluation.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [
+  "tools/cctv.py",
+  "tools/fetch_sard.py",
+  "tools/profile_sard.py",
+  "tools/profile_yolo.py",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

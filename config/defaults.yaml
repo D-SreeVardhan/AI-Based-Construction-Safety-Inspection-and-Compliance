@@ -1,0 +1,100 @@
+schema_version: 1
+
+intake:
+  target_fps: 15.0
+  target_width: 1920
+  target_height: 1080
+  portrait_policy: letterbox
+  native_drift_limit_diagonal: 0.001
+  provisional_residual_limit_diagonal: 0.002
+  geometry_residual_limit_wh: 0.05
+  interpolation_max_frames: 3
+
+stage1:
+  model_path: artifacts/models/stage1/best.pt
+  image_size: 960
+  confidence: 0.20
+  iou: 0.60
+  maximum_detections: 200
+  device: mps
+
+tracker:
+  type: bytetrack
+  track_high_threshold: 0.45
+  track_low_threshold: 0.10
+  new_track_threshold: 0.55
+  match_threshold: 0.80
+  buffer_seconds: 3.0
+
+ppe:
+  model_path: artifacts/models/ppe/best.pt
+  image_size: 224
+  batch_size: 32
+  confidence_floor: 0.70
+  minimum_person_height_px: 40
+  temporal_alpha: 0.35
+  minimum_observations: 4
+
+pose:
+  model_path: artifacts/models/pose/yolo26n-pose.pt
+  image_size: 640
+  confidence_floor: 0.60
+  sample_spacing_seconds: 0.50
+  maximum_samples_per_track: 20
+
+relative_plane:
+  minimum_pairs: 12
+  minimum_distinct_tracks: 5
+  minimum_pixel_height: 40
+  minimum_keypoint_confidence: 0.60
+  minimum_standing_probability: 0.80
+  maximum_occlusion_fraction: 0.25
+  minimum_vertical_inlier_ratio: 0.65
+  maximum_reprojection_rms_px: 3.0
+  maximum_temporal_horizon_shift_px: 5.0
+
+uncertainty:
+  bootstrap_samples: 500
+  confidence_level: 0.95
+  minimum_successful_samples: 350
+  temporal_block_seconds: 2.0
+  seed: 42017
+
+scene:
+  gemini_model: gemini-2.5-flash
+  prompt_version: scene-v1
+  minimum_keyframes: 8
+  maximum_keyframes: 12
+  minimum_support_frames: 5
+  minimum_support_fraction: 0.60
+  zone_cluster_iou: 0.35
+  edge_cluster_diagonal_distance: 0.02
+
+rules:
+  ppe_confidence_floor: 0.70
+  r1_debounce_seconds: 1.5
+  r2_debounce_seconds: 1.5
+  r3_debounce_seconds: 1.0
+  r4_debounce_seconds: 1.0
+  r5_debounce_seconds: 1.0
+  resolution_hysteresis_seconds: 2.0
+  cooldown_seconds: 30.0
+  missing_observation_grace_seconds: 0.25
+  r4_near_max_wh: 1.5
+  r4_caution_max_wh: 3.0
+  r5_edge_max_wh: 0.8
+
+render:
+  output_width: 1920
+  output_height: 1080
+  output_fps: 15.0
+  pane_width: 940
+  pane_height: 529
+  crf: 18
+  preset: medium
+
+runtime:
+  processing_checkpoint_frames: 250
+  progress_events_per_second: 10
+  minimum_free_disk_gib: 10
+  maximum_peak_memory_gib: 13

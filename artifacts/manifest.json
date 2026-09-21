@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "artifacts": [
+    {
+      "name": "stage1",
+      "type": "local_checkpoint",
+      "sha256": null,
+      "destination": "artifacts/models/stage1/best.pt",
+      "required_for": ["runtime"]
+    },
+    {
+      "name": "ppe",
+      "type": "local_checkpoint",
+      "sha256": null,
+      "destination": "artifacts/models/ppe/best.pt",
+      "required_for": ["runtime"]
+    },
+    {
+      "name": "pose",
+      "type": "ultralytics_asset",
+      "asset_id": "yolo26n-pose.pt",
+      "sha256": null,
+      "destination": "artifacts/models/pose/yolo26n-pose.pt",
+      "required_for": ["relative_plane"]
+    }
+  ]
+}
