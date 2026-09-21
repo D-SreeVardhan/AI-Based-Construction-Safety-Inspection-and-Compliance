@@ -1,0 +1,50 @@
+from __future__ import annotations
+
+from pydantic import Field
+
+from shared.coordinates import DistanceInterval, StrictModel
+from shared.enums import DistanceBand, RuleId, RuleStatus
+
+
+class RuleResult(StrictModel):
+    rule_id: RuleId
+    status: RuleStatus
+    reason_code: str
+    basis: str
+    track_id: str | None = None
+    object_id: str | None = None
+    proposal_ids: tuple[str, ...] = ()
+    observed_from_s: float | None = None
+    observed_to_s: float | None = None
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    distance: DistanceInterval | None = None
+    relative_band: DistanceBand | None = None
+    references: tuple[str, ...] = ()
+
+
+class IncidentRecord(StrictModel):
+    schema_version: int = 1
+    incident_id: str
+    run_id: str
+    shot_id: str
+    catalogue_sha256: str
+    rule_id: RuleId
+    status: RuleStatus
+    reason_code: str
+    basis: str
+    severity: str
+    canonical_track_id: str | None = None
+    object_id: str | None = None
+    proposal_ids: tuple[str, ...] = ()
+    first_seen_s: float = Field(ge=0.0)
+    confirmed_at_s: float = Field(ge=0.0)
+    resolved_at_s: float | None = None
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    distance: DistanceInterval | None = None
+    relative_band: DistanceBand | None = None
+    observation_text: str
+    action_code: str
+    action_text: str
+    references: tuple[str, ...] = ()
+    evidence_path: str
+    source_frame_index: int = Field(ge=0)

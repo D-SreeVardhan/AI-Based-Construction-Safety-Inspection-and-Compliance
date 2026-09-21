@@ -10,7 +10,7 @@ def test_status_entrypoint(capsys: CaptureFixture[str]) -> None:
     assert main(["status"]) == 0
     captured = capsys.readouterr()
     assert "construction-safety-twin" in captured.out
-    assert "scaffold" in captured.out
+    assert "process" in captured.out
 
 
 def test_rule_ids_are_complete() -> None:

@@ -51,3 +51,19 @@ class DistanceBand(StrEnum):
     CAUTION = "caution"
     CLEAR = "clear"
     INDETERMINATE = "indeterminate"
+
+
+class ProcessingStatus(StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class JobStage(StrEnum):
+    INTAKE = "intake"
+    DETECTION = "detection"
+    MAPPING_RULES = "mapping_rules"
+    RENDER = "render"
+    PUBLISH = "publish"

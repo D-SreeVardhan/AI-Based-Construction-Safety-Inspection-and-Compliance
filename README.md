@@ -45,13 +45,16 @@ docs/plan/     v7 specification
 
 ## Setup
 
-Requires Python 3.11.9 and [uv](https://docs.astral.sh/uv/).
+Requires Python 3.11.9 and [uv](https://docs.astral.sh/uv/). ffmpeg is required for the placeholder side-by-side MP4.
 
 ```bash
 uv sync --group dev
-uv run pytest tests/unit
+uv run pytest tests/unit tests/e2e
 uv run safety-twin status
+uv run safety-twin process path/to/clip.mp4
 ```
+
+`process` currently runs the **Week-1 fake pipeline**: synthetic tracks, R1–R5 coverage, placeholder twin video, and `output/<run_id>/`. Real detection is not implemented yet.
 
 Or: `./run.sh status`
 
