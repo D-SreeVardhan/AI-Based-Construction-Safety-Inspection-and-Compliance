@@ -4,7 +4,7 @@ College project: drop a fixed-camera construction-site video, run offline proces
 
 This is a heuristic triage tool, not a certified safety system and not legal advice. Distances are relative risk bands, not metres. The twin does not reconstruct hidden geometry or BIM.
 
-**Status:** repository scaffold. Detection, tracking, rules, renderer, and desktop UI are not implemented yet. Existing intake/profiling scripts live in `tools/`.
+**Status:** Week-1 fake pipeline. `safety-twin process` and `safety-twin app` produce a placeholder side-by-side MP4 plus R1–R5 coverage. Real detection is not implemented.
 
 Full specification: [`docs/plan/construction-safety-2.5d-twin-plan-v7.md`](docs/plan/construction-safety-2.5d-twin-plan-v7.md)
 
@@ -52,9 +52,10 @@ uv sync --group dev
 uv run pytest tests/unit tests/e2e
 uv run safety-twin status
 uv run safety-twin process path/to/clip.mp4
+uv run safety-twin app
 ```
 
-`process` currently runs the **Week-1 fake pipeline**: synthetic tracks, R1–R5 coverage, placeholder twin video, and `output/<run_id>/`. Real detection is not implemented yet.
+`process` / `app` run the **Week-1 fake pipeline**: synthetic tracks, R1–R5 coverage, placeholder twin video, and `output/<run_id>/`. Demo clip assignments are frozen in `evaluation/demo_inventory.yaml`.
 
 Or: `./run.sh status`
 

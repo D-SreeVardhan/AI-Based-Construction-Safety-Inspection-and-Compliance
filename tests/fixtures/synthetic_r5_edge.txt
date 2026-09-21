@@ -1,0 +1,4 @@
+Synthetic R5 elevated/open-edge fixture.
+
+Not a real site clip. Use only to exercise R5 state-machine logic.
+Do not report precision or recall from this file.

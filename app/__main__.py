@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from app.window import launch_window
 from jobs.pipeline_job import FakePipelineJob
 
 
@@ -15,6 +16,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("status", help="Print scaffold status")
+    sub.add_parser("app", help="Open the desktop window to choose a video")
 
     process = sub.add_parser(
         "process",
@@ -45,9 +47,12 @@ def main(argv: list[str] | None = None) -> int:
         root = Path(__file__).resolve().parents[1]
         print("construction-safety-twin 0.1.0")
         print(f"root={root}")
-        print("Commands: status | process <video>")
+        print("Commands: status | app | process <video>")
         print("See docs/plan/construction-safety-2.5d-twin-plan-v7.md")
         return 0
+
+    if args.command == "app":
+        return launch_window()
 
     if args.command == "process":
         job = FakePipelineJob(

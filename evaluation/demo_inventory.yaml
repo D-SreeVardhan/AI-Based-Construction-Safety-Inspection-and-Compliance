@@ -1,0 +1,86 @@
+schema_version: 1
+frozen_at: "2026-09-21"
+notes: >
+  Clip assignments are frozen before threshold tuning. Entire videos stay in one
+  split. SARD is display/evaluation only — never train on it. Rules without a
+  licensed real positive use a labelled synthetic fixture and must not be used
+  for precision/recall claims.
+
+splits:
+  development:
+    - sard-9
+    - sard-8
+    - source-slab-pour
+    - synthetic-r3-zone
+    - synthetic-r5-edge
+  heldout:
+    - source-yard-truck
+
+clips:
+  sard-9:
+    path: data/external/sard/9_playable.mp4
+    camera_id: sard-complementary-9
+    license: display-eval-only
+    split: development
+  sard-8:
+    path: data/external/sard/8_playable.mp4
+    camera_id: sard-complementary-8
+    license: display-eval-only
+    split: development
+  source-slab-pour:
+    path: data/source/slab_pour.mp4
+    camera_id: source-slab-pour
+    license: operator-supplied
+    split: development
+  source-yard-truck:
+    path: data/source/yard_truck.mp4
+    camera_id: source-yard-truck
+    license: operator-supplied
+    split: heldout
+  synthetic-r3-zone:
+    path: tests/fixtures/synthetic_r3_zone.txt
+    camera_id: synthetic-r3
+    license: synthetic-fixture
+    split: development
+  synthetic-r5-edge:
+    path: tests/fixtures/synthetic_r5_edge.txt
+    camera_id: synthetic-r5
+    license: synthetic-fixture
+    split: development
+
+rules:
+  R1:
+    clip_id: sard-9
+    expected_interval_s: [1.0, 2.5]
+    expected_status: evaluated_alert
+    evidence: Week-1 synthetic person-1 no-helmet placeholder; replace after PPE model
+    licensed_real_positive: false
+    use_for_precision_recall: false
+  R2:
+    clip_id: sard-8
+    expected_interval_s: [2.0, 6.0]
+    expected_status: evaluated_alert
+    evidence: Reserved for hi-vis near machinery once stage-1 + PPE exist
+    licensed_real_positive: false
+    use_for_precision_recall: false
+  R3:
+    clip_id: synthetic-r3-zone
+    expected_interval_s: [0.5, 2.0]
+    expected_status: evaluated_alert
+    evidence: Synthetic restricted-zone fixture; not a licensed site positive
+    licensed_real_positive: false
+    use_for_precision_recall: false
+  R4:
+    clip_id: source-slab-pour
+    expected_interval_s: [8.0, 16.0]
+    expected_status: evaluated_alert
+    evidence: Machinery proximity candidate after relative-plane mapping
+    licensed_real_positive: false
+    use_for_precision_recall: false
+  R5:
+    clip_id: synthetic-r5-edge
+    expected_interval_s: [0.5, 2.0]
+    expected_status: evaluated_alert
+    evidence: Synthetic elevated-edge fixture; not a licensed site positive
+    licensed_real_positive: false
+    use_for_precision_recall: false

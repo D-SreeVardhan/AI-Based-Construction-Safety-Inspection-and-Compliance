@@ -1,0 +1,4 @@
+Synthetic R3 restricted-zone fixture.
+
+Not a real site clip. Use only to exercise R3 state-machine logic.
+Do not report precision or recall from this file.
