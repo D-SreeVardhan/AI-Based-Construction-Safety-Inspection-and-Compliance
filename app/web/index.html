@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Site Twin · Night desk</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+  <div class="stripes" aria-hidden="true"></div>
+
+  <header class="mast">
+    <p class="ticket">Desk 04 · Night shift · TKT-<span id="ticket-n">7F2C</span></p>
+    <h1>
+      <span class="h-small">Construction safety</span>
+      Site Twin
+    </h1>
+    <p class="lede">Drop a fixed-camera clip. Offline pass. Approximate 2.5D map — not a survey, not metres, not legal advice.</p>
+  </header>
+
+  <aside class="stamp" aria-hidden="true">
+    <span>Heuristic</span>
+    <span>Not certified</span>
+  </aside>
+
+  <main>
+    <section class="deck" id="drop" tabindex="0">
+      <div class="bolts" aria-hidden="true">
+        <i></i><i></i><i></i><i></i>
+      </div>
+      <p class="deck-kicker">Intake plate</p>
+      <p class="deck-title">Drop the reel</p>
+      <p class="deck-sub">MP4 · MOV · MKV · AVI · or click to pick</p>
+      <input id="file" type="file" accept="video/*,.mp4,.mov,.mkv,.avi,.m4v" hidden>
+    </section>
+
+    <section class="rail">
+      <h2>Radio log</h2>
+      <ol class="log" id="log">
+        <li>Desk live. Waiting for a clip.</li>
+      </ol>
+    </section>
+
+    <section class="result" id="result" hidden>
+      <div class="result-head">
+        <h2 id="run-id">run</h2>
+        <a id="report-link" href="#" target="_blank" rel="noreferrer">Open report</a>
+      </div>
+      <video id="preview" controls playsinline></video>
+      <div class="split-caption">
+        <span>Source slot</span>
+        <span>Twin slot</span>
+      </div>
+      <h3>Rule coverage</h3>
+      <ol class="coverage" id="coverage"></ol>
+      <h3>Incidents</h3>
+      <ul class="incidents" id="incidents"></ul>
+    </section>
+  </main>
+
+  <footer>
+    <p>Week-1 fake pipeline · detections are synthetic placeholders · R1–R5 always listed</p>
+  </footer>
+  <script src="/static/app.js"></script>
+</body>
+</html>

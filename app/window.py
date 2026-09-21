@@ -10,7 +10,6 @@ def is_video_path(path: Path) -> bool:
 
 
 def launch_window() -> int:
-    # Tk is optional on headless CI; imported only when the desktop command runs.
-    from app.desktop import run_desktop
+    from app.server import serve_app
 
-    return run_desktop()
+    return serve_app()

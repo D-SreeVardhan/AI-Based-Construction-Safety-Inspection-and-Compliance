@@ -16,7 +16,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("status", help="Print scaffold status")
-    sub.add_parser("app", help="Open the desktop window to choose a video")
+    sub.add_parser("app", help="Open the local Site Twin desk in the browser")
 
     process = sub.add_parser(
         "process",
