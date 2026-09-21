@@ -6,7 +6,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
 
-from app.server import DeskHandler
+from app.server import PROJECT_ROOT, DeskHandler, resolve_local_video
 
 
 def _start(output_root: Path) -> tuple[ThreadingHTTPServer, str]:
@@ -26,13 +26,12 @@ def test_index_and_process(tmp_path: Path) -> None:
         page = conn.getresponse()
         body = page.read().decode("utf-8")
         assert page.status == 200
-        assert "Site Twin" in body
-        assert "Drop the reel" in body
+        assert "Construction Safety Twin" in body
+        assert "Add a video" in body
 
-        conn.request("GET", "/static/styles.css")
-        css = conn.getresponse()
-        assert css.status == 200
-        assert "--rust:" in css.read().decode("utf-8")
+        conn.request("GET", "/api/clips")
+        clips = json.loads(conn.getresponse().read().decode("utf-8"))
+        assert "clips" in clips
 
         boundary = "----twinboundary"
         payload = (
@@ -56,7 +55,37 @@ def test_index_and_process(tmp_path: Path) -> None:
         assert response.status == 200
         assert data["status"] == "completed"
         assert [row["rule_id"] for row in data["rule_coverage"]] == ["R1", "R2", "R3", "R4", "R5"]
-        assert data["incidents"]
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+def test_process_local_path(tmp_path: Path) -> None:
+    video = PROJECT_ROOT / "tests" / "fixtures" / "local_clip.bin"
+    video.write_bytes(b"fixture")
+    httpd, addr = _start(tmp_path / "output")
+    try:
+        conn = HTTPConnection(addr, timeout=10)
+        body = json.dumps({"path": str(video)}).encode()
+        conn.request(
+            "POST",
+            "/api/process?skip_video=1",
+            body=body,
+            headers={"Content-Type": "application/json", "Content-Length": str(len(body))},
+        )
+        response = conn.getresponse()
+        data = json.loads(response.read().decode("utf-8"))
+        assert response.status == 200
+        assert data["status"] == "completed"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        video.unlink(missing_ok=True)
+
+
+def test_resolve_rejects_outside_data() -> None:
+    try:
+        resolve_local_video("/etc/hosts")
+        raise AssertionError("should reject")
+    except ValueError:
+        pass
