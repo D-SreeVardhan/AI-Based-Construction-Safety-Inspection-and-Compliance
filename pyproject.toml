@@ -17,7 +17,7 @@ requires = ["hatchling>=1.27,<2"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["app", "jobs", "pipeline", "twin", "shared", "llm", "tools", "evaluation"]
+packages = ["app", "cloud", "jobs", "pipeline", "twin", "shared", "llm", "tools", "evaluation"]
 
 # Vision/LLM extras (torch, ultralytics, mlx) are added when those stages land.
 # Pin set is specified in docs/plan/construction-safety-2.5d-twin-plan-v7.md §28.2.

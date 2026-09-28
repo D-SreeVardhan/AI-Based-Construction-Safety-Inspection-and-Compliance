@@ -11,6 +11,10 @@ from urllib.parse import parse_qs, urlparse
 
 from app.window import VIDEO_SUFFIXES, is_video_path
 from jobs.pipeline_job import FakePipelineJob
+from llm.qa import answer_run_question
+from shared.schemas.incidents import IncidentRecord
+from shared.schemas.llm import GroundedBriefing
+from shared.schemas.run import RuleCoverageEntry
 
 WEB_ROOT = Path(__file__).resolve().parent / "web"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -48,7 +52,15 @@ class DeskHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
-        if parsed.path != "/api/process":
+        path = posixpath.normpath(parsed.path)
+        if path.startswith("/api/runs/") and path.endswith("/ask"):
+            parts = path.split("/")
+            if len(parts) != 5:
+                self.send_error(404)
+                return
+            self._ask_and_reply(parts[3])
+            return
+        if path != "/api/process":
             self.send_error(404)
             return
         skip_video = parse_qs(parsed.query).get("skip_video", ["0"])[0] == "1"
@@ -83,7 +95,9 @@ class DeskHandler(BaseHTTPRequestHandler):
             self._send_json(500, {"error": str(exc)})
             return
         incidents_path = job.run_dir / "incidents.json"
+        briefings_path = job.run_dir / "briefings.json"
         incidents = json.loads(incidents_path.read_text(encoding="utf-8")).get("incidents", [])
+        briefings = json.loads(briefings_path.read_text(encoding="utf-8")).get("briefings", [])
         self._send_json(
             200,
             {
@@ -92,10 +106,48 @@ class DeskHandler(BaseHTTPRequestHandler):
                 "disclaimer": manifest.disclaimer,
                 "rule_coverage": [e.model_dump(mode="json") for e in manifest.rule_coverage],
                 "incidents": incidents,
+                "briefings": briefings,
                 "video_url": f"/runs/{manifest.run_id}/safety_twin.mp4",
                 "report_url": f"/runs/{manifest.run_id}/report.html",
             },
         )
+
+    def _ask_and_reply(self, run_id: str) -> None:
+        if not _is_safe_run_id(run_id):
+            self.send_error(404)
+            return
+        run_dir = self.output_root / run_id
+        try:
+            payload = self._read_json()
+            question = payload["question"]
+            if not isinstance(question, str):
+                raise ValueError("Question must be a string.")
+            manifest = json.loads((run_dir / "run_manifest.json").read_text(encoding="utf-8"))
+            incidents_raw = json.loads((run_dir / "incidents.json").read_text(encoding="utf-8"))
+            briefings_raw = json.loads((run_dir / "briefings.json").read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            self._send_json(404, {"error": f"No run named {run_id}"})
+            return
+        except (KeyError, ValueError, json.JSONDecodeError) as exc:
+            self._send_json(400, {"error": str(exc)})
+            return
+
+        coverage = tuple(
+            RuleCoverageEntry.model_validate(item) for item in manifest.get("rule_coverage", [])
+        )
+        incidents = tuple(
+            IncidentRecord.model_validate(item) for item in incidents_raw.get("incidents", [])
+        )
+        briefings = tuple(
+            GroundedBriefing.model_validate(item) for item in briefings_raw.get("briefings", [])
+        )
+        answer = answer_run_question(
+            question=question,
+            coverage=coverage,
+            incidents=incidents,
+            briefings=briefings,
+        )
+        self._send_json(200, answer.model_dump(mode="json"))
 
     def _read_json(self) -> dict[str, object]:
         length = int(self.headers.get("Content-Length", "0"))
@@ -142,7 +194,13 @@ class DeskHandler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         run_id, name = parts
-        allowed = {"safety_twin.mp4", "report.html", "run_manifest.json", "incidents.json"}
+        allowed = {
+            "briefings.json",
+            "incidents.json",
+            "report.html",
+            "run_manifest.json",
+            "safety_twin.mp4",
+        }
         if name not in allowed:
             self.send_error(404)
             return
@@ -160,6 +218,7 @@ class DeskHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(data)
 
@@ -168,6 +227,7 @@ class DeskHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(data)
 
@@ -214,6 +274,10 @@ def _is_relative_to(path: Path, root: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _is_safe_run_id(run_id: str) -> bool:
+    return bool(run_id) and "/" not in run_id and ".." not in run_id and not run_id.startswith(".")
 
 
 def _size_label(size: int) -> str:

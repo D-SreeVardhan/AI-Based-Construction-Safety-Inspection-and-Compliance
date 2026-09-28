@@ -28,6 +28,7 @@ def test_fake_pipeline_skip_video(tiny_input: Path, tmp_path: Path) -> None:
     run_dir = out / "run-test-skip"
     assert manifest.status.value == "completed"
     assert (run_dir / "run_manifest.json").is_file()
+    assert (run_dir / "briefings.json").is_file()
     assert (run_dir / "incidents.json").is_file()
     assert (run_dir / "tracks.jsonl").is_file()
     assert (run_dir / "report.html").is_file()
@@ -42,6 +43,9 @@ def test_fake_pipeline_skip_video(tiny_input: Path, tmp_path: Path) -> None:
         "R4",
         "R5",
     ]
+    briefings = json.loads((run_dir / "briefings.json").read_text())
+    first_chunk = briefings["briefings"][0]["retrieved_chunks"][0]["chunk"]
+    assert first_chunk["chunk_id"] == "bocw-ppe-helmet-r1"
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")

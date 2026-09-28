@@ -7,48 +7,113 @@
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
-  <main>
-    <header>
+  <div class="hazard" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <div class="ident">
+      <span class="mark" aria-hidden="true">CST</span>
       <h1>Construction Safety Twin</h1>
-      <p class="lede">Add a site video. The app runs offline and builds a side-by-side preview. This is a trial tool, not legal advice. Distances are not in metres.</p>
-    </header>
+    </div>
+    <div class="flags">
+      <span class="flag"><i class="led led-on" aria-hidden="true"></i>Offline</span>
+      <span class="flag flag-warn">Trial tool &mdash; not legal advice</span>
+    </div>
+  </header>
 
-    <section class="card" id="drop" tabindex="0">
-      <p class="card-title">Add a video</p>
-      <p class="hint">Drop a file here, or click to choose. Large files (over 400 MB) should use a local path or the list below — the browser cannot upload an 11 GB clip.</p>
-      <input id="file" type="file" accept="video/*,.mp4,.mov,.mkv,.avi,.m4v" hidden>
+  <main class="bench">
+    <section class="panel intake" aria-labelledby="intake-heading">
+      <div class="panel-head">
+        <h2 id="intake-heading">Intake</h2>
+        <span class="panel-tag">01</span>
+      </div>
+
+      <div class="panel-body">
+        <div class="dropzone" id="drop" role="button" tabindex="0"
+             aria-label="Add a video file: drop a file here or press Enter to browse">
+          <span class="drop-glyph" aria-hidden="true"></span>
+          <span class="drop-title">Drop a site video</span>
+          <span class="drop-sub">or press to browse &middot; mp4, mov, mkv, avi, m4v</span>
+          <input id="file" type="file" accept="video/*,.mp4,.mov,.mkv,.avi,.m4v" hidden>
+        </div>
+        <p class="note">Files over 400 MB cannot go through the browser. Use a path or the source list.</p>
+
+        <form id="path-form" class="field" method="post" action="/api/process">
+          <label for="path">Local file path</label>
+          <div class="field-row">
+            <input id="path" name="path" type="text" spellcheck="false" autocomplete="off"
+                   placeholder="data/external/sard/9_playable.mp4">
+            <button type="submit" id="run" class="btn-run">Run</button>
+          </div>
+        </form>
+
+        <div class="subhead">
+          <h3>Source clips</h3>
+          <span class="count" id="clip-count"></span>
+        </div>
+        <ul class="clips" id="clips">
+          <li class="clips-empty">Scanning project data folder&hellip;</li>
+        </ul>
+      </div>
     </section>
 
-    <form id="path-form" class="path-row">
-      <label for="path">Local file path</label>
-      <div class="row">
-        <input id="path" name="path" type="text" spellcheck="false" placeholder="/Users/…/data/external/sard/6.mp4">
-        <button type="submit">Run</button>
+    <section class="panel output" aria-labelledby="output-heading">
+      <div class="panel-head">
+        <h2 id="output-heading">Run output</h2>
+        <span class="panel-tag" id="run-id">&mdash;</span>
       </div>
-    </form>
 
-    <section>
-      <h2>Videos on this computer</h2>
-      <ul class="clips" id="clips">
-        <li class="empty">Looking for videos in the project data folder…</li>
-      </ul>
-    </section>
-
-    <p class="status" id="status">Ready.</p>
-
-    <section class="result" id="result" hidden>
-      <div class="result-head">
-        <h2 id="run-id">Result</h2>
-        <a id="report-link" href="#" target="_blank" rel="noreferrer">Open report</a>
+      <div class="statusbar" id="statusbar">
+        <i class="led" id="status-led" aria-hidden="true"></i>
+        <p class="status" id="status" aria-live="polite">Idle. Add a clip to start a run.</p>
+        <span class="elapsed" id="elapsed"></span>
       </div>
-      <video id="preview" controls playsinline></video>
-      <p class="hint">Left: source. Right: twin. Both are placeholders until detection is built.</p>
-      <h2>Rules checked</h2>
-      <ol class="coverage" id="coverage"></ol>
-      <h2>Alerts</h2>
-      <ul class="incidents" id="incidents"></ul>
+
+      <div class="panel-body">
+        <div class="idle" id="idle">
+          <p>No run yet.</p>
+          <p class="note">Results appear here: the side-by-side twin, rule coverage for R1&ndash;R5, and any alerts.</p>
+        </div>
+
+        <div class="result" id="result" hidden>
+          <figure class="screen">
+            <video id="preview" controls playsinline></video>
+            <figcaption>Left: source feed. Right: 2.5D twin. Both are placeholders until detection lands. Distances are not metres.</figcaption>
+          </figure>
+
+          <div class="subhead">
+            <h3>Rule coverage</h3>
+            <a class="report-link" id="report-link" href="#" target="_blank" rel="noreferrer">Open full report</a>
+          </div>
+          <ul class="coverage" id="coverage"></ul>
+
+          <div class="subhead">
+            <h3>Alerts</h3>
+            <span class="count" id="alert-count"></span>
+          </div>
+          <ul class="incidents" id="incidents"></ul>
+
+          <div class="subhead">
+            <h3>Grounded briefings</h3>
+            <span class="count">local RAG</span>
+          </div>
+          <ul class="briefings" id="briefings"></ul>
+
+          <div class="subhead">
+            <h3>Ask this run</h3>
+            <span class="count">deterministic tools</span>
+          </div>
+          <form id="ask-form" class="ask-form">
+            <label class="sr-only" for="question">Ask a question about this run</label>
+            <input id="question" name="question" type="text" spellcheck="true"
+                   placeholder="Ask: which helmet alerts were found?">
+            <button type="submit" id="ask" class="btn-ask" disabled>Ask</button>
+          </form>
+          <ul class="answers" id="answers"></ul>
+        </div>
+      </div>
     </section>
   </main>
+
   <script src="/static/app.js"></script>
 </body>
 </html>

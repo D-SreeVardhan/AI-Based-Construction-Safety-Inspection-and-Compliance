@@ -8,6 +8,8 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
+from llm.regulations import CATALOGUE_SHA256
+from llm.retrieval import build_grounded_briefing
 from pipeline.rules.engine import evaluate_fake_rules
 from shared.config import AppConfig, load_config
 from shared.coordinates import Box2, Point2
@@ -19,6 +21,7 @@ from shared.enums import (
     VestState,
 )
 from shared.schemas.jobs import JobRecord
+from shared.schemas.llm import GroundedBriefing
 from shared.schemas.run import InputVideoMeta, PassTiming, RunManifest
 from shared.schemas.tracks import HelmetRecord, Pass1TrackObservation, VestRecord
 
@@ -31,6 +34,10 @@ def _iso(ts: datetime) -> str:
     return ts.isoformat().replace("+00:00", "Z")
 
 
+FULL_HASH_BELOW_BYTES = 64 * 1024 * 1024
+HASH_SAMPLE_BYTES = 16 * 1024 * 1024
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -39,12 +46,32 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def probe_video(path: Path) -> InputVideoMeta:
+def fingerprint_input(
+    path: Path,
+    *,
+    full_below_bytes: int = FULL_HASH_BELOW_BYTES,
+    sample_bytes: int = HASH_SAMPLE_BYTES,
+) -> tuple[str, bool]:
+    """Full SHA-256 for small files; size + head/tail sample for large clips."""
+    size = path.stat().st_size
+    if size <= full_below_bytes:
+        return _sha256_file(path), True
+    digest = hashlib.sha256()
+    digest.update(f"{size}\n".encode())
+    with path.open("rb") as handle:
+        digest.update(handle.read(sample_bytes))
+        if size > sample_bytes:
+            handle.seek(max(0, size - sample_bytes))
+            digest.update(handle.read(sample_bytes))
+    return digest.hexdigest(), False
+
+
+def probe_video(path: Path) -> tuple[InputVideoMeta, bool]:
     """Best-effort ffprobe; falls back to path + hash only."""
-    sha = _sha256_file(path)
+    sha, hash_complete = fingerprint_input(path)
     meta = InputVideoMeta(path=str(path.resolve()), sha256=sha)
     if shutil.which("ffprobe") is None:
-        return meta
+        return meta, hash_complete
     try:
         completed = subprocess.run(
             [
@@ -67,7 +94,7 @@ def probe_video(path: Path) -> InputVideoMeta:
             timeout=30,
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
-        return meta
+        return meta, hash_complete
     payload = json.loads(completed.stdout)
     streams = payload.get("streams") or []
     width = height = fps = duration = None
@@ -91,7 +118,7 @@ def probe_video(path: Path) -> InputVideoMeta:
         height=height,
         duration_s=duration,
         fps=fps,
-    )
+    ), hash_complete
 
 
 def _fake_tracks(shot_id: str, duration_s: float) -> list[Pass1TrackObservation]:
@@ -215,7 +242,7 @@ class FakePipelineJob:
         )
         self._write_json(self.run_dir / "job.json", job)
 
-        input_meta = probe_video(self.input_path)
+        input_meta, hash_complete = probe_video(self.input_path)
         duration_s = input_meta.duration_s or 2.0
         out_w = self.config.render.output_width
         out_h = self.config.render.output_height
@@ -248,11 +275,17 @@ class FakePipelineJob:
         coverage, incidents, _results = evaluate_fake_rules(
             run_id=self.run_id,
             shot_id=self.shot_id,
+            catalogue_sha256=CATALOGUE_SHA256,
         )
+        briefings = tuple(build_grounded_briefing(incident) for incident in incidents)
         incidents_path = self.run_dir / "incidents.json"
         self._write_json(
             incidents_path,
             {"schema_version": 1, "incidents": [i.model_dump(mode="json") for i in incidents]},
+        )
+        self._write_json(
+            self.run_dir / "briefings.json",
+            {"schema_version": 1, "briefings": [b.model_dump(mode="json") for b in briefings]},
         )
         for incident in incidents:
             evidence_file = self.run_dir / incident.evidence_path
@@ -273,6 +306,7 @@ class FakePipelineJob:
 
         video_path = self.run_dir / "safety_twin.mp4"
         artifacts: dict[str, str] = {
+            "briefings": "briefings.json",
             "incidents": "incidents.json",
             "tracks": "tracks.jsonl",
             "run_manifest": "run_manifest.json",
@@ -303,21 +337,25 @@ class FakePipelineJob:
             created_at=_iso(started),
             completed_at=_iso(finished),
             input_video=input_meta,
-            model_ids={"stage1": "fake", "ppe": "fake"},
+            model_ids={
+                "stage1": "fake",
+                "ppe": "fake",
+                "rag": "local-bm25-alias-bootstrap",
+                "briefing": "deterministic-grounded-briefing-v1",
+            },
             dependency_versions={"pipeline": "fake-0.1.0"},
+            prompt_versions={"briefing_template": "deterministic-v1"},
             gemini_status="unused",
             scene_cache_status="none",
             rule_coverage=coverage,
-            warnings=(
-                "Week-1 fake pipeline: detections and twin geometry are synthetic placeholders.",
-            ),
+            warnings=self._run_warnings(hash_complete),
             pass_timings=(timing,),
             output_artifacts=artifacts,
         )
         self._write_json(self.run_dir / "run_manifest.json", manifest)
 
         report_path = self.run_dir / "report.html"
-        report_path.write_text(self._report_html(manifest, incidents), encoding="utf-8")
+        report_path.write_text(self._report_html(manifest, incidents, briefings), encoding="utf-8")
         artifacts = {**artifacts, "report": "report.html"}
         manifest = manifest.model_copy(update={"output_artifacts": artifacts})
         self._write_json(self.run_dir / "run_manifest.json", manifest)
@@ -335,6 +373,15 @@ class FakePipelineJob:
         return manifest
 
     @staticmethod
+    def _run_warnings(hash_complete: bool) -> tuple[str, ...]:
+        warnings = [
+            "Week-1 fake pipeline: detections and twin geometry are synthetic placeholders.",
+        ]
+        if not hash_complete:
+            warnings.append("Input fingerprint is a head/tail sample, not a full-file SHA-256.")
+        return tuple(warnings)
+
+    @staticmethod
     def _write_json(path: Path, payload: object) -> None:
         if hasattr(payload, "model_dump"):
             data = payload.model_dump(mode="json")  # type: ignore[union-attr]
@@ -343,9 +390,22 @@ class FakePipelineJob:
         path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
     @staticmethod
-    def _report_html(manifest: RunManifest, incidents: tuple) -> str:
+    def _report_html(
+        manifest: RunManifest,
+        incidents: tuple,
+        briefings: tuple[GroundedBriefing, ...],
+    ) -> str:
         cards = "".join(
             f"<li><strong>{i.rule_id.value}</strong> — {i.observation_text}</li>" for i in incidents
+        )
+        briefing_cards = "".join(
+            "<li>"
+            f"<strong>{b.rule_id.value}</strong> "
+            + " ".join(sentence.text for sentence in b.sentences)
+            + " "
+            + ", ".join(hit.chunk.clause_ref for hit in b.retrieved_chunks)
+            + "</li>"
+            for b in briefings
         )
         coverage = "".join(
             f"<li>{e.rule_id.value}: {e.status.value} ({e.reason_code})</li>"
@@ -360,6 +420,8 @@ class FakePipelineJob:
   <p>Status: {manifest.status.value} · mode: {manifest.mode}</p>
   <h2>Incidents</h2>
   <ul>{cards}</ul>
+  <h2>Grounded briefings</h2>
+  <ul>{briefing_cards}</ul>
   <h2>Rule coverage</h2>
   <ul>{coverage}</ul>
 </body>
