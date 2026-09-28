@@ -117,6 +117,29 @@ def _build_context(
     return "\n".join(lines)
 
 
+def _grounding_overlap(answer: str, context: str, *, min_ngram: int = 3) -> float:
+    """Fraction of answer trigrams that appear in the context string.
+
+    A score below ~0.10 suggests the answer introduces content not grounded
+    in the retrieved evidence.  Returns 1.0 if the answer is very short
+    (< min_ngram tokens) to avoid false low-confidence flags.
+    """
+    from llm.retrieval import TOKEN_RE  # noqa: PLC0415
+
+    def ngrams(text: str, n: int) -> frozenset[tuple[str, ...]]:
+        tokens = TOKEN_RE.findall(text.lower())
+        if len(tokens) < n:
+            return frozenset()
+        return frozenset(zip(*[tokens[i:] for i in range(n)], strict=False))
+
+    answer_ngrams = ngrams(answer, min_ngram)
+    if not answer_ngrams:
+        return 1.0  # too short to evaluate — don't flag
+    context_ngrams = ngrams(context, min_ngram)
+    overlap = len(answer_ngrams & context_ngrams)
+    return overlap / len(answer_ngrams)
+
+
 def _call_gemini_qa(
     *,
     question: str,
@@ -218,10 +241,24 @@ def answer_run_question(
                 context=context,
                 api_key=api_key,
             )
+            overlap = _grounding_overlap(answer, context)
+            low_confidence = overlap < 0.08
+            if low_confidence:
+                answer = (
+                    answer
+                    + "\n\n_(Low evidence overlap detected — answer may draw on general knowledge "
+                    "rather than retrieved run data. Verify against the cited clauses.)_"
+                )
             return RunQuestionAnswer(
                 question=clean_question,
                 answer=answer,
-                tool_trace=("embed_query", "retrieve_hybrid", "gemini_qa"),
+                tool_trace=(
+                    "embed_query",
+                    "retrieve_hybrid",
+                    "mmr_rerank",
+                    "gemini_qa",
+                    "grounding_check",
+                ),
                 cited_incident_ids=_incident_ids(incidents),
                 cited_clause_ids=tuple(h.chunk.chunk_id for h in retrieved),
             )

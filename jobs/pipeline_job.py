@@ -16,6 +16,7 @@ from llm.adjudicator import GeminiPPEAdjudicator
 from llm.regulations import CATALOGUE_SHA256
 from llm.retrieval import build_grounded_briefing
 from pipeline.intake import FrameSampler
+from pipeline.report import build_report_html
 from pipeline.rules.engine import evaluate_fake_rules, evaluate_real_rules
 from pipeline.vision import Stage1Detector
 from shared.config import AppConfig, load_config
@@ -28,7 +29,6 @@ from shared.enums import (
     VestState,
 )
 from shared.schemas.jobs import JobRecord
-from shared.schemas.llm import GroundedBriefing
 from shared.schemas.run import InputVideoMeta, PassTiming, RunManifest
 from shared.schemas.tracks import HelmetRecord, Pass1TrackObservation, VestRecord
 
@@ -362,7 +362,7 @@ class FakePipelineJob:
         self._write_json(self.run_dir / "run_manifest.json", manifest)
 
         report_path = self.run_dir / "report.html"
-        report_path.write_text(self._report_html(manifest, incidents, briefings), encoding="utf-8")
+        report_path.write_text(build_report_html(manifest, incidents, briefings), encoding="utf-8")
         artifacts = {**artifacts, "report": "report.html"}
         manifest = manifest.model_copy(update={"output_artifacts": artifacts})
         self._write_json(self.run_dir / "run_manifest.json", manifest)
@@ -395,45 +395,6 @@ class FakePipelineJob:
         else:
             data = payload
         path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-
-    @staticmethod
-    def _report_html(
-        manifest: RunManifest,
-        incidents: tuple,
-        briefings: tuple[GroundedBriefing, ...],
-    ) -> str:
-        cards = "".join(
-            f"<li><strong>{i.rule_id.value}</strong> — {i.observation_text}</li>" for i in incidents
-        )
-        briefing_cards = "".join(
-            "<li>"
-            f"<strong>{b.rule_id.value}</strong> "
-            + " ".join(sentence.text for sentence in b.sentences)
-            + " "
-            + ", ".join(hit.chunk.clause_ref for hit in b.retrieved_chunks)
-            + "</li>"
-            for b in briefings
-        )
-        coverage = "".join(
-            f"<li>{e.rule_id.value}: {e.status.value} ({e.reason_code})</li>"
-            for e in manifest.rule_coverage
-        )
-        return f"""<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="utf-8"><title>Run {manifest.run_id}</title></head>
-<body>
-  <h1>Construction Safety Twin — run report</h1>
-  <p><em>{manifest.disclaimer}</em></p>
-  <p>Status: {manifest.status.value} · mode: {manifest.mode}</p>
-  <h2>Incidents</h2>
-  <ul>{cards}</ul>
-  <h2>Grounded briefings</h2>
-  <ul>{briefing_cards}</ul>
-  <h2>Rule coverage</h2>
-  <ul>{coverage}</ul>
-</body>
-</html>
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -695,7 +656,7 @@ class RealPipelineJob:
         self._write_json(self.run_dir / "run_manifest.json", manifest)
 
         report_path = self.run_dir / "report.html"
-        report_path.write_text(self._report_html(manifest, incidents, briefings), encoding="utf-8")
+        report_path.write_text(build_report_html(manifest, incidents, briefings), encoding="utf-8")
         artifacts = {**artifacts, "report": "report.html"}
         manifest = manifest.model_copy(update={"output_artifacts": artifacts})
         self._write_json(self.run_dir / "run_manifest.json", manifest)
@@ -719,42 +680,3 @@ class RealPipelineJob:
         else:
             data = payload
         path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-
-    @staticmethod
-    def _report_html(
-        manifest: RunManifest,
-        incidents: tuple,
-        briefings: tuple,
-    ) -> str:
-        cards = "".join(
-            f"<li><strong>{i.rule_id.value}</strong> — {i.observation_text}</li>" for i in incidents
-        )
-        briefing_cards = "".join(
-            "<li>"
-            f"<strong>{b.rule_id.value}</strong> "
-            + " ".join(sentence.text for sentence in b.sentences)
-            + " "
-            + ", ".join(hit.chunk.clause_ref for hit in b.retrieved_chunks)
-            + "</li>"
-            for b in briefings
-        )
-        coverage = "".join(
-            f"<li>{e.rule_id.value}: {e.status.value} ({e.reason_code})</li>"
-            for e in manifest.rule_coverage
-        )
-        return f"""<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="utf-8"><title>Run {manifest.run_id} — Real Pipeline</title></head>
-<body>
-  <h1>Construction Safety Twin — real pipeline report</h1>
-  <p><em>{manifest.disclaimer}</em></p>
-  <p>Status: {manifest.status.value} · mode: {manifest.mode}</p>
-  <h2>Incidents ({len(incidents)})</h2>
-  <ul>{cards or "<li>None detected</li>"}</ul>
-  <h2>Grounded briefings</h2>
-  <ul>{briefing_cards or "<li>None</li>"}</ul>
-  <h2>Rule coverage</h2>
-  <ul>{coverage}</ul>
-</body>
-</html>
-"""

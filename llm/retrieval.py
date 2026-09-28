@@ -12,7 +12,10 @@ from shared.schemas.llm import CitedSentence, ClauseChunk, GroundedBriefing, Ret
 
 TOKEN_RE = re.compile(r"[a-z0-9]+")
 MODEL_ID = "deterministic-grounded-briefing-v1"
-RETRIEVAL_MODE = "local-bm25-alias-bootstrap"
+RETRIEVAL_MODE = "hybrid-bm25-dense-rrf-mmr-v1"
+
+# MMR trade-off: 0 = pure diversity, 1 = pure relevance
+MMR_LAMBDA = 0.6
 STOPWORDS = {
     "a",
     "an",
@@ -68,6 +71,88 @@ def _semantic_hint_score(rule_id: RuleId | None, document_tokens: tuple[str, ...
 
 def _document_text(chunk: ClauseChunk) -> str:
     return f"{chunk.clause_ref} {chunk.title} {chunk.text}"
+
+
+def _bigrams(tokens: tuple[str, ...]) -> frozenset[tuple[str, str]]:
+    if len(tokens) < 2:
+        return frozenset()
+    return frozenset(zip(tokens, tokens[1:], strict=False))
+
+
+def _lexical_similarity(a: ClauseChunk, b: ClauseChunk) -> float:
+    """Bigram Jaccard similarity between two clause texts (lexical proxy for MMR)."""
+    ta = _bigrams(_tokens(_document_text(a)))
+    tb = _bigrams(_tokens(_document_text(b)))
+    if not ta or not tb:
+        return 0.0
+    intersection = len(ta & tb)
+    union = len(ta | tb)
+    return intersection / union if union else 0.0
+
+
+def _mmr_rerank(
+    candidates: list[RetrievalHit],
+    *,
+    top_k: int,
+    embeddings: dict[str, list[float]] | None = None,
+    mmr_lambda: float = MMR_LAMBDA,
+) -> list[RetrievalHit]:
+    """Maximal Marginal Relevance re-ranking to diversify retrieval results.
+
+    Uses dense cosine similarity when embeddings are available; falls back to
+    lexical bigram Jaccard similarity otherwise.
+    Modifies rank numbers in-place on the returned hits.
+    """
+    if not candidates or top_k <= 0:
+        return candidates[:top_k]
+
+    remaining = list(candidates)
+    selected: list[RetrievalHit] = []
+
+    while remaining and len(selected) < top_k:
+        best_idx = -1
+        best_score = float("-inf")
+
+        for idx, hit in enumerate(remaining):
+            relevance = hit.score
+
+            if not selected:
+                mmr_score = relevance
+            else:
+                # Max similarity to any already-selected chunk
+                max_sim = 0.0
+                for sel in selected:
+                    hit_vec = embeddings.get(hit.chunk.chunk_id) if embeddings else None
+                    sel_vec = embeddings.get(sel.chunk.chunk_id) if embeddings else None
+                    if hit_vec is not None and sel_vec is not None:
+                        sim = cosine_similarity(hit_vec, sel_vec)
+                    else:
+                        sim = _lexical_similarity(hit.chunk, sel.chunk)
+                    max_sim = max(max_sim, sim)
+
+                mmr_score = mmr_lambda * relevance - (1.0 - mmr_lambda) * max_sim
+
+            if mmr_score > best_score:
+                best_score = mmr_score
+                best_idx = idx
+
+        if best_idx < 0:
+            break
+
+        winner = remaining.pop(best_idx)
+        selected.append(winner)
+
+    # Re-number ranks
+    return [
+        RetrievalHit(
+            chunk=h.chunk,
+            score=h.score,
+            lexical_score=h.lexical_score,
+            semantic_hint_score=h.semantic_hint_score,
+            rank=i + 1,
+        )
+        for i, h in enumerate(selected)
+    ]
 
 
 def build_incident_query(incident: IncidentRecord) -> str:
@@ -209,9 +294,9 @@ def retrieve_clauses_hybrid(
                     rank=rank,
                 )
             )
-        return tuple(results)
+        return tuple(_mmr_rerank(results, top_k=top_k, embeddings=embeddings))
 
-    return lex_hits[:top_k]
+    return tuple(_mmr_rerank(list(lex_hits[: top_k * 2]), top_k=top_k, embeddings=embeddings))
 
 
 # Backwards-compatible alias used by FakePipelineJob and cloud handlers
