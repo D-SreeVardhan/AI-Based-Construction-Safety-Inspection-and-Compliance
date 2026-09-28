@@ -93,6 +93,19 @@ def test_adjudicator_calls_gemini_on_cache_miss(tmp_path: Path) -> None:
     assert result.vest.state == VestState.VEST
 
 
+def test_adjudicator_returns_unknown_on_gemini_error(tmp_path: Path) -> None:
+    crop = _fake_crop()
+
+    with patch("llm.adjudicator.urlopen", side_effect=TimeoutError("timed out")):
+        adj = GeminiPPEAdjudicator("test-key", cache_dir=tmp_path)
+        result = adj.assess(crop)
+
+    assert result.cached is False
+    assert result.helmet.state == HelmetState.UNKNOWN
+    assert result.vest.state == VestState.UNKNOWN
+    assert "timed out" in result.raw_json
+
+
 def test_adjudicator_requires_api_key() -> None:
     with pytest.raises(ValueError, match="GEMINI_API_KEY"):
         GeminiPPEAdjudicator("")

@@ -5,7 +5,7 @@ import hashlib
 import json
 import time
 from pathlib import Path
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import cv2
@@ -101,6 +101,16 @@ def _parse_result(raw: str) -> AdjudicationResult:
     )
 
 
+def _unknown_result(raw_json: str, *, latency_ms: int = 0) -> AdjudicationResult:
+    return AdjudicationResult(
+        helmet=HelmetRecord(state=HelmetState.UNKNOWN, confidence=0.0, visible=False),
+        vest=VestRecord(state=VestState.UNKNOWN, confidence=0.0, visible=False),
+        raw_json=raw_json,
+        latency_ms=latency_ms,
+        cached=False,
+    )
+
+
 class GeminiPPEAdjudicator:
     """Assess PPE state from a person crop using Gemini Vision structured output.
 
@@ -138,10 +148,19 @@ class GeminiPPEAdjudicator:
                 return cached
 
         t0 = time.monotonic()
-        raw = self._call_gemini(jpeg)
+        try:
+            raw = self._call_gemini(jpeg)
+        except (RuntimeError, URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+            latency_ms = int((time.monotonic() - t0) * 1000)
+            return _unknown_result(json.dumps({"error": str(exc)}), latency_ms=latency_ms)
         latency_ms = int((time.monotonic() - t0) * 1000)
 
-        result = _parse_result(raw)
+        try:
+            result = _parse_result(raw)
+        except (json.JSONDecodeError, ValueError, KeyError) as exc:
+            return _unknown_result(
+                json.dumps({"error": str(exc), "raw": raw}), latency_ms=latency_ms
+            )
         result.cached = False
         result.latency_ms = latency_ms
 

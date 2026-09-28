@@ -6,12 +6,18 @@ import os
 import shutil
 import subprocess
 import uuid
+import warnings
 from datetime import UTC, datetime
 from pathlib import Path
 
+import cv2
+
+from llm.adjudicator import GeminiPPEAdjudicator
 from llm.regulations import CATALOGUE_SHA256
 from llm.retrieval import build_grounded_briefing
+from pipeline.intake import FrameSampler
 from pipeline.rules.engine import evaluate_fake_rules, evaluate_real_rules
+from pipeline.vision import Stage1Detector
 from shared.config import AppConfig, load_config
 from shared.coordinates import Box2, Point2
 from shared.enums import (
@@ -467,27 +473,6 @@ class RealPipelineJob:
 
     def run(self) -> RunManifest:
         """Run the full real pipeline. Falls back to fake if ultralytics missing."""
-        try:
-            from pipeline.intake import FrameSampler  # noqa: PLC0415
-            from pipeline.vision import Stage1Detector  # noqa: PLC0415
-        except ImportError:
-            import warnings
-
-            warnings.warn(
-                "ultralytics not installed — falling back to FakePipelineJob. "
-                "Install vision deps: uv sync --extra vision",
-                stacklevel=2,
-            )
-            return FakePipelineJob(
-                self.input_path,
-                output_root=self.output_root,
-                config=self.config,
-                run_id=self.run_id,
-                skip_video=self.skip_video,
-            ).run()
-
-        from llm.adjudicator import GeminiPPEAdjudicator  # noqa: PLC0415
-
         if not self.input_path.is_file():
             raise FileNotFoundError(f"input video not found: {self.input_path}")
 
@@ -523,11 +508,25 @@ class RealPipelineJob:
             target_width=self.config.intake.target_width,
             target_height=self.config.intake.target_height,
         )
-        detector = Stage1Detector(
-            self.config.stage1,
-            self.config.tracker,
-            shot_id=self.shot_id,
-        )
+        try:
+            detector = Stage1Detector(
+                self.config.stage1,
+                self.config.tracker,
+                shot_id=self.shot_id,
+            )
+        except ImportError:
+            warnings.warn(
+                "ultralytics not installed — falling back to FakePipelineJob. "
+                "Install vision deps: uv sync --extra vision",
+                stacklevel=2,
+            )
+            return FakePipelineJob(
+                self.input_path,
+                output_root=self.output_root,
+                config=self.config,
+                run_id=self.run_id,
+                skip_video=self.skip_video,
+            ).run()
         observations, crops = detector.detect_and_track(
             sampler,
             ppe_sample_interval_s=self.ppe_sample_interval_s,
@@ -544,21 +543,22 @@ class RealPipelineJob:
         )
         self._write_json(self.run_dir / "job.json", job)
 
-        adjudicator = GeminiPPEAdjudicator(
-            self.gemini_api_key,
-            model=self.config.scene.gemini_model,
-            cache_dir=cache_dir,
-        )
-
         # Build track-level adjudication: update observations in place
         obs_by_track: dict[str, list] = {}
         for obs in observations:
             obs_by_track.setdefault(obs.canonical_track_id, []).append(obs)
 
-        for crop in crops:
-            import cv2  # noqa: PLC0415
+        adjudicator = (
+            GeminiPPEAdjudicator(
+                self.gemini_api_key,
+                model=self.config.scene.gemini_model,
+                cache_dir=cache_dir,
+            )
+            if self.gemini_api_key
+            else None
+        )
 
-            result = adjudicator.assess(crop.crop_bgr)
+        for crop in crops:
             # Write crop to disk
             rel_crop_path = (
                 f"crops/{crop.canonical_track_id.replace('/', '-')}-f{crop.frame_index}.jpg"
@@ -566,6 +566,9 @@ class RealPipelineJob:
             abs_crop = self.run_dir / rel_crop_path
             abs_crop.parent.mkdir(parents=True, exist_ok=True)
             cv2.imwrite(str(abs_crop), crop.crop_bgr)
+            if adjudicator is None:
+                continue
+            result = adjudicator.assess(crop.crop_bgr)
             # Patch matching observations in the same track near this frame
             track_obs = obs_by_track.get(crop.canonical_track_id, [])
             for obs in track_obs:
@@ -658,11 +661,11 @@ class RealPipelineJob:
             finished_at=_iso(finished),
             duration_s=(finished - started).total_seconds(),
         )
-        warnings: list[str] = []
+        run_warnings: list[str] = []
         if not hash_complete:
-            warnings.append("Input fingerprint is a head/tail sample, not a full-file SHA-256.")
+            run_warnings.append("Input fingerprint is a head/tail sample, not a full-file SHA-256.")
         if not self.gemini_api_key:
-            warnings.append(
+            run_warnings.append(
                 "GEMINI_API_KEY not set — all PPE assessments returned UNKNOWN. "
                 "R1/R2 alerts will be empty."
             )
@@ -685,7 +688,7 @@ class RealPipelineJob:
             gemini_status="ok" if self.gemini_api_key else "no_key",
             scene_cache_status="none",
             rule_coverage=coverage,
-            warnings=tuple(warnings),
+            warnings=tuple(run_warnings),
             pass_timings=(timing,),
             output_artifacts=artifacts,
         )
