@@ -162,10 +162,7 @@ def build_grounded_briefing(incident: IncidentRecord) -> GroundedBriefing:
     primary = hits[0].chunk
     sentences = (
         CitedSentence(
-            text=(
-                f"{incident.rule_id.value} {incident.status.value}: "
-                f"{incident.observation_text}"
-            ),
+            text=(f"{incident.rule_id.value} {incident.status.value}: {incident.observation_text}"),
             citation_ids=(primary.chunk_id,),
         ),
         CitedSentence(

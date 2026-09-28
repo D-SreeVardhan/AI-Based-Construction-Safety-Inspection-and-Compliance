@@ -106,8 +106,7 @@ def answer_run_question(
         return RunQuestionAnswer(
             question=clean_question,
             answer=(
-                f"{rule_id.value} has no alert in this run. "
-                f"Coverage status: {status} ({reason})."
+                f"{rule_id.value} has no alert in this run. Coverage status: {status} ({reason})."
             ),
             tool_trace=("summarize_coverage",),
         )

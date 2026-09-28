@@ -68,36 +68,27 @@ def load_run(run_id: str | None) -> tuple[str, str, str | None]:
             return f"No run named `{run_id}`.", "", None
         run = run_rows[0]
         manifest = run.get("manifest") or {}
-        incidents = client.select(
-            "incidents", filters={"run_id": f"eq.{run_id}"}, order="id.asc"
-        )
+        incidents = client.select("incidents", filters={"run_id": f"eq.{run_id}"}, order="id.asc")
         briefings = client.select(
             "briefings",
             filters={"run_id": f"eq.{run_id}"},
             order="incident_id.asc",
         )
         incident_lines = [
-            f"### {item['rule_id']} — {item['status']}\n"
-            f"{item['payload']['observation_text']}"
+            f"### {item['rule_id']} — {item['status']}\n{item['payload']['observation_text']}"
             for item in incidents
         ]
         briefing_lines = []
         for item in briefings:
             payload = item["payload"]
-            sentences = " ".join(
-                sentence["text"] for sentence in payload.get("sentences", [])
-            )
+            sentences = " ".join(sentence["text"] for sentence in payload.get("sentences", []))
             refs = [
                 hit["chunk"]["clause_ref"]
                 for hit in payload.get("retrieved_chunks", [])
                 if "chunk" in hit
             ]
-            briefing_lines.append(
-                f"### {item['rule_id']}\n{sentences}\n\nCites: {', '.join(refs)}"
-            )
-        cov = ", ".join(
-            c["rule_id"] for c in manifest.get("rule_coverage", [])
-        )
+            briefing_lines.append(f"### {item['rule_id']}\n{sentences}\n\nCites: {', '.join(refs)}")
+        cov = ", ".join(c["rule_id"] for c in manifest.get("rule_coverage", []))
         summary = (
             f"# Run `{run_id}`\n"
             f"Clip: `{run.get('clip_name', '?')}`  "
@@ -128,12 +119,9 @@ def ask_run(run_id: str | None, question: str) -> str:
         incidents_raw = client.select("incidents", filters={"run_id": f"eq.{run_id}"})
         briefings_raw = client.select("briefings", filters={"run_id": f"eq.{run_id}"})
         coverage = tuple(
-            RuleCoverageEntry.model_validate(item)
-            for item in manifest.get("rule_coverage", [])
+            RuleCoverageEntry.model_validate(item) for item in manifest.get("rule_coverage", [])
         )
-        incidents = tuple(
-            IncidentRecord.model_validate(item["payload"]) for item in incidents_raw
-        )
+        incidents = tuple(IncidentRecord.model_validate(item["payload"]) for item in incidents_raw)
         briefings = tuple(
             GroundedBriefing.model_validate(item["payload"]) for item in briefings_raw
         )
