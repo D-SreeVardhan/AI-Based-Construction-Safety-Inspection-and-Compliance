@@ -8,7 +8,7 @@ from shared.schemas.llm import ClauseChunk
 SOURCE_URL = "https://clc.gov.in/clc/acts-rules/building-and-other-construction-workers"
 RETRIEVED_ON = "2026-09-27"
 
-EMBEDDING_MODEL = "text-embedding-004"
+EMBEDDING_MODEL = "gemini-embedding-001"
 EMBEDDING_DIM = 768
 
 
