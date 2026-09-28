@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re as _re
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError
@@ -85,6 +86,22 @@ class SupabaseClient:
         headers = self._headers(content_type=content_type)
         self._request("POST", url, body=local_path.read_bytes(), headers=headers)
         return f"{self.config.supabase_bucket}/{object_path}"
+
+    def count(self, table: str, *, filters: dict[str, str] | None = None) -> int:
+        """Return the row count for *table*, optionally filtered."""
+        query: dict[str, str] = {"select": "id"}
+        if filters:
+            query.update(filters)
+        url = f"{self.config.supabase_url}/rest/v1/{table}?{urlencode(query)}"
+        headers = {**self._headers(), "Prefer": "count=exact", "Range-Unit": "items"}
+        request = Request(url, headers=headers, method="GET")
+        try:
+            with urlopen(request, timeout=30) as response:
+                content_range = response.headers.get("Content-Range", "*/0")
+                match = _re.search(r"/(\d+)$", content_range)
+                return int(match.group(1)) if match else 0
+        except Exception:
+            return -1
 
     def signed_url(self, object_path: str, *, expires_in: int = 3600) -> str | None:
         quoted_path = quote(object_path.lstrip("/"))

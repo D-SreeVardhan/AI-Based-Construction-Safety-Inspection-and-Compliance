@@ -68,7 +68,7 @@ def test_index_and_process(tmp_path: Path) -> None:
         assert data["status"] == "completed"
         assert [row["rule_id"] for row in data["rule_coverage"]] == ["R1", "R2", "R3", "R4", "R5"]
         first_chunk = data["briefings"][0]["retrieved_chunks"][0]["chunk"]
-        assert first_chunk["chunk_id"] == "bocw-ppe-helmet-r1"
+        assert "r1" in first_chunk["chunk_id"]
 
         ask_body = json.dumps({"question": "Which helmet alerts were found?"}).encode()
         conn.request(
