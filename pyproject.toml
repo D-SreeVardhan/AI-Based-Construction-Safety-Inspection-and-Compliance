@@ -26,6 +26,9 @@ report = [
   "pandas>=2.2,<3",
   "pyarrow>=17,<23",
 ]
+vision = [
+    "ultralytics>=8.3,<9",
+]
 
 [dependency-groups]
 dev = [
