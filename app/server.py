@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import posixpath
 import tempfile
 import threading
@@ -10,7 +11,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from app.window import VIDEO_SUFFIXES, is_video_path
-from jobs.pipeline_job import FakePipelineJob
+from jobs.pipeline_job import FakePipelineJob, RealPipelineJob
+from llm.embedding_cache import get_embeddings
 from llm.qa import answer_run_question
 from shared.schemas.incidents import IncidentRecord
 from shared.schemas.llm import GroundedBriefing
@@ -85,11 +87,20 @@ class DeskHandler(BaseHTTPRequestHandler):
 
     def _run_and_reply(self, video_path: Path, *, skip_video: bool) -> None:
         try:
-            job = FakePipelineJob(
-                video_path,
-                output_root=self.output_root,
-                skip_video=skip_video,
-            )
+            gemini_key = os.environ.get("GEMINI_API_KEY", "")
+            if gemini_key:
+                job: FakePipelineJob | RealPipelineJob = RealPipelineJob(
+                    video_path,
+                    output_root=self.output_root,
+                    skip_video=skip_video,
+                    gemini_api_key=gemini_key,
+                )
+            else:
+                job = FakePipelineJob(
+                    video_path,
+                    output_root=self.output_root,
+                    skip_video=skip_video,
+                )
             manifest = job.run()
         except Exception as exc:
             self._send_json(500, {"error": str(exc)})
@@ -146,6 +157,8 @@ class DeskHandler(BaseHTTPRequestHandler):
             coverage=coverage,
             incidents=incidents,
             briefings=briefings,
+            gemini_api_key=os.environ.get("GEMINI_API_KEY"),
+            embeddings=get_embeddings(),
         )
         self._send_json(200, answer.model_dump(mode="json"))
 
