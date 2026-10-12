@@ -4,8 +4,9 @@ import argparse
 from pathlib import Path
 
 from app.window import launch_window
+from cloud.config import load_dotenv
 from cloud.publish import publish_run
-from jobs.pipeline_job import FakePipelineJob
+from jobs.pipeline_job import create_pipeline_job
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -23,7 +24,12 @@ def main(argv: list[str] | None = None) -> int:
 
     process = sub.add_parser(
         "process",
-        help="Run the Week-1 fake pipeline on a video (placeholder twin + R1–R5 coverage)",
+        help="Run the pipeline on a video (real YOLO + Gemini when GEMINI_API_KEY is set)",
+    )
+    process.add_argument(
+        "--fake",
+        action="store_true",
+        help="Force the synthetic fixture pipeline even when GEMINI_API_KEY is set",
     )
     process.add_argument("video", type=Path, help="Path to an input video file")
     process.add_argument(
@@ -45,6 +51,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     args = parser.parse_args(argv)
+    load_dotenv()
 
     if args.command in (None, "status"):
         root = Path(__file__).resolve().parents[1]
@@ -58,11 +65,12 @@ def main(argv: list[str] | None = None) -> int:
         return launch_window()
 
     if args.command == "process":
-        job = FakePipelineJob(
+        job = create_pipeline_job(
             args.video,
             output_root=args.output_root,
             run_id=args.run_id,
             skip_video=args.skip_video,
+            force_fake=args.fake,
         )
         manifest = job.run()
         print(f"run_id={manifest.run_id}")

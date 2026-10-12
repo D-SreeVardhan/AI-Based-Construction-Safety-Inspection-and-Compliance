@@ -248,17 +248,18 @@ def _briefings_block(briefings: tuple[GroundedBriefing, ...]) -> str:
 def _provenance_block(manifest: RunManifest) -> str:
     generated_at = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
     rows = [
-        ("Report generated", generated_at),
-        ("Run ID", manifest.run_id),
-        ("Status", f"{manifest.status.value} ({manifest.mode})"),
-        ("Input clip", manifest.input_video.path),
+        ("Report generated", _e(generated_at)),
+        ("Run ID", _e(manifest.run_id)),
+        ("Status", _e(f"{manifest.status.value} ({manifest.mode})")),
+        ("Input clip", _e(manifest.input_video.path)),
         ("Corpus", "BOCW Central Rules 1998 expanded catalogue"),
         ("Corpus source", f'<a href="{_e(SOURCE_URL)}" target="_blank">{_e(SOURCE_URL)}</a>'),
-        ("Corpus SHA-256", CATALOGUE_SHA256[:16] + "…"),
-        ("Embedding model", EMBEDDING_MODEL),
-        ("Retrieval model", MODEL_ID),
-        ("Retrieval mode", RETRIEVAL_MODE),
-        ("Disclaimer", manifest.disclaimer),
+        ("Corpus SHA-256", _e(CATALOGUE_SHA256[:16] + "…")),
+        ("Embedding model", _e(EMBEDDING_MODEL)),
+        ("Retrieval model", _e(MODEL_ID)),
+        ("Retrieval mode", _e(RETRIEVAL_MODE)),
+        *(("Run warning", _e(warning)) for warning in manifest.warnings),
+        ("Disclaimer", _e(manifest.disclaimer)),
     ]
     trs = "".join(f"<tr><td>{_e(k)}</td><td>{v}</td></tr>" for k, v in rows)
     return '<div class="provenance"><table><tbody>' + trs + "</tbody></table></div>"

@@ -8,7 +8,7 @@ from urllib.request import Request, urlopen
 
 from llm.embeddings import embed_query
 from llm.regulations import BOOTSTRAP_CLAUSES
-from llm.retrieval import retrieve_clauses_hybrid
+from llm.retrieval import TOKEN_RE, retrieve_clauses_hybrid
 from shared.enums import RuleId, RuleStatus
 from shared.schemas.incidents import IncidentRecord
 from shared.schemas.llm import GroundedBriefing, RunQuestionAnswer
@@ -23,6 +23,17 @@ LEGAL_VERDICT_TERMS = (
     "who is liable",
     "legal liability",
     "certify compliance",
+)
+REGULATION_TERMS = (
+    "regulation",
+    "clause",
+    "bocw",
+    "law",
+    "requirement",
+    "require",
+    "rule say",
+    "rules say",
+    "what does the rule",
 )
 RULE_TERMS: dict[RuleId, tuple[str, ...]] = {
     RuleId.R1: ("r1", "helmet", "head", "hardhat"),
@@ -124,7 +135,6 @@ def _grounding_overlap(answer: str, context: str, *, min_ngram: int = 3) -> floa
     in the retrieved evidence.  Returns 1.0 if the answer is very short
     (< min_ngram tokens) to avoid false low-confidence flags.
     """
-    from llm.retrieval import TOKEN_RE  # noqa: PLC0415
 
     def ngrams(text: str, n: int) -> frozenset[tuple[str, ...]]:
         tokens = TOKEN_RE.findall(text.lower())
@@ -267,6 +277,15 @@ def answer_run_question(
             pass
 
     # ── Deterministic fallback ──────────────────────────────────────────────
+    if retrieved and any(term in lowered for term in REGULATION_TERMS):
+        quoted = " ".join(f"[{hit.chunk.clause_ref}] {hit.chunk.text}" for hit in retrieved[:2])
+        return RunQuestionAnswer(
+            question=clean_question,
+            answer=f"Retrieved regulation text: {quoted}",
+            tool_trace=("retrieve_hybrid", "quote_clauses"),
+            cited_clause_ids=tuple(hit.chunk.chunk_id for hit in retrieved[:2]),
+        )
+
     if rule_id is not None:
         matching_incidents = tuple(
             incident for incident in incidents if incident.rule_id is rule_id

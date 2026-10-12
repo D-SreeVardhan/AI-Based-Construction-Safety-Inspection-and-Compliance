@@ -175,6 +175,44 @@ def test_no_person_tracks_gives_inconclusive_r1() -> None:
     assert len(incidents) == 0
 
 
+def test_unknown_ppe_everywhere_is_inconclusive_not_clear() -> None:
+    observations = [
+        _make_obs(
+            shot_id="s0",
+            track_id=10,
+            canonical="s0/vehicle-10",
+            object_class="vehicle",
+            frame_index=i,
+            video_time_s=float(i),
+        )
+        for i in range(5)
+    ] + [
+        _make_obs(
+            shot_id="s0",
+            track_id=1,
+            canonical="s0/person-1",
+            object_class="person",
+            frame_index=i,
+            video_time_s=float(i),
+            helmet_state=HelmetState.UNKNOWN,
+            vest_state=VestState.UNKNOWN,
+        )
+        for i in range(5)
+    ]
+    coverage, incidents, _ = evaluate_real_rules(
+        run_id="test-run",
+        shot_id="s0",
+        observations=observations,
+        catalogue_sha256="abc",
+        config=CONFIG,
+    )
+    by_rule = {c.rule_id: c for c in coverage}
+    assert incidents == ()
+    for rule in (RuleId.R1, RuleId.R2):
+        assert by_rule[rule].status == RuleStatus.INCONCLUSIVE
+        assert by_rule[rule].reason_code == "no_ppe_evidence"
+
+
 def test_r3_r5_always_unsupported() -> None:
     coverage, _, _ = evaluate_real_rules(
         run_id="test-run",

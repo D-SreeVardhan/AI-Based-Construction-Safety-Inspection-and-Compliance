@@ -81,13 +81,12 @@ class Stage1Detector:
         if model_path.exists():
             return _YOLO(str(model_path))
         model_path.parent.mkdir(parents=True, exist_ok=True)
-        model = _YOLO("yolo11n.pt")
-        try:
-            src = Path(model.model.pt_path)  # type: ignore[attr-defined]
-            if src.exists() and src.resolve() != model_path.resolve():
-                shutil.copy2(src, model_path)
-        except (AttributeError, OSError):
-            pass
+        # Ultralytics only auto-downloads paths whose filename is a known asset name,
+        # so fetch into the gitignored model dir under that name, then copy.
+        pretrained = model_path.parent / "yolo11n.pt"
+        model = _YOLO(str(pretrained))
+        if pretrained.exists():
+            shutil.copy2(pretrained, model_path)
         return model
 
     def detect_and_track(

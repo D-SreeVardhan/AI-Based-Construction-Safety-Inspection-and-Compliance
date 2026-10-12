@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock, patch
 
-from llm.qa import answer_run_question
+from llm.qa import _grounding_overlap, answer_run_question
 from shared.enums import RuleId, RuleStatus
 from shared.schemas.incidents import IncidentRecord
 from shared.schemas.run import RuleCoverageEntry
@@ -146,3 +146,50 @@ def test_gemini_qa_falls_back_on_error():
     # Should fall through to deterministic
     assert result.refused is False
     assert "R1" in result.answer
+
+
+def test_grounding_overlap_scores_copied_vs_invented_text():
+    context = "R1 evaluated_alert worker detected without helmet from 0.0s to 4.5s near the truck"
+    assert _grounding_overlap("worker detected without helmet from 0.0s", context) == 1.0
+    assert _grounding_overlap("the crane operator lacked a harness license", context) == 0.0
+    assert _grounding_overlap("ok", context) == 1.0
+
+
+def test_gemini_answer_without_evidence_overlap_is_flagged():
+    mock_response = MagicMock()
+    mock_response.__enter__ = lambda s: s
+    mock_response.__exit__ = MagicMock(return_value=False)
+    mock_response.read.return_value = json.dumps(
+        {
+            "candidates": [
+                {"content": {"parts": [{"text": "Scaffold towers require weekly tagging audits."}]}}
+            ]
+        }
+    ).encode()
+
+    with (
+        patch("llm.qa.urlopen", return_value=mock_response),
+        patch("llm.qa.embed_query", return_value=[0.1] * 768),
+    ):
+        result = answer_run_question(
+            question="What happened with the helmet?",
+            coverage=_coverage(),
+            incidents=(_incident(),),
+            briefings=(),
+            gemini_api_key="fake-key",
+        )
+    assert "grounding_check" in result.tool_trace
+    assert "Low evidence overlap" in result.answer
+
+
+def test_offline_regulation_question_quotes_retrieved_clauses():
+    result = answer_run_question(
+        question="What does the regulation say about helmets?",
+        coverage=_coverage(),
+        incidents=(),
+        briefings=(),
+    )
+    assert result.refused is False
+    assert "quote_clauses" in result.tool_trace
+    assert result.cited_clause_ids and all("r1" in cid for cid in result.cited_clause_ids)
+    assert "BOCW Central Rules" in result.answer

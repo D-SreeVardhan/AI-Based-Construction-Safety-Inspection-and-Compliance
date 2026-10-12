@@ -95,7 +95,7 @@ def fetch_embeddings_from_supabase() -> dict[str, list[float]]:
     for row in rows:
         vec = row.get("embedding")
         if vec and isinstance(vec, list):
-            result[row["id"]] = vec
+            result[row["id"]] = [float(value) for value in vec]
         elif vec and isinstance(vec, str):
             parsed = json.loads(vec)
             if isinstance(parsed, list):

@@ -6,6 +6,8 @@ from shared.schemas.incidents import IncidentRecord, RuleResult
 from shared.schemas.run import RuleCoverageEntry
 from shared.schemas.tracks import Pass1TrackObservation
 
+NO_PPE_EVIDENCE = "no_ppe_evidence"
+
 # ---------------------------------------------------------------------------
 # Fake pipeline (Week-1 placeholder) — kept for backwards compatibility
 # ---------------------------------------------------------------------------
@@ -113,6 +115,12 @@ def _r1_eval(
         key=lambda o: o.video_time_s,
     )
     if not no_helmet:
+        if not any(o.helmet and o.helmet.state == HelmetState.HELMET for o in obs):
+            return None, RuleCoverageEntry(
+                rule_id=RuleId.R1,
+                status=RuleStatus.INCONCLUSIVE,
+                reason_code=NO_PPE_EVIDENCE,
+            )
         return None, RuleCoverageEntry(
             rule_id=RuleId.R1,
             status=RuleStatus.EVALUATED_CLEAR,
@@ -241,9 +249,13 @@ def evaluate_real_rules(
     elif any(c.status == RuleStatus.EVALUATED_ALERT for c in r1_cov_candidates):
         r1_status = RuleStatus.EVALUATED_ALERT
         r1_reason = "detected_missing_helmet"
-    elif any(c.status == RuleStatus.INCONCLUSIVE for c in r1_cov_candidates):
+    elif any(c.reason_code == "no_helmet_below_debounce" for c in r1_cov_candidates):
         r1_status = RuleStatus.INCONCLUSIVE
         r1_reason = "no_helmet_below_debounce"
+    elif all(c.reason_code == NO_PPE_EVIDENCE for c in r1_cov_candidates):
+        # Without a single definite helmet verdict, "clear" would be an unearned all-clear.
+        r1_status = RuleStatus.INCONCLUSIVE
+        r1_reason = NO_PPE_EVIDENCE
 
     # --- R2 evaluation ---
     # Fire when a person with NO_VEST is detected in the same frame as a vehicle
@@ -308,9 +320,21 @@ def evaluate_real_rules(
                     source_frame_index=first.frame_index,
                 )
             )
+        vest_verdicts = (
+            o.vest
+            for track_obs in person_tracks.values()
+            for o in track_obs
+            if o.frame_index in vehicle_frames
+        )
+        has_vest_evidence = any(
+            v is not None and v.state in (VestState.VEST, VestState.NO_VEST) for v in vest_verdicts
+        )
         if r2_incidents:
             r2_status = RuleStatus.EVALUATED_ALERT
             r2_reason = "detected_missing_vest_near_vehicle"
+        elif not has_vest_evidence:
+            r2_status = RuleStatus.INCONCLUSIVE
+            r2_reason = NO_PPE_EVIDENCE
         else:
             r2_status = RuleStatus.EVALUATED_CLEAR
             r2_reason = "no_vest_alerts_near_vehicle"

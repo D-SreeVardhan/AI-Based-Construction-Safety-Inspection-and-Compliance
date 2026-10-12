@@ -3,7 +3,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 import time
+from collections.abc import Callable
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -16,6 +18,23 @@ from shared.schemas.tracks import HelmetRecord, VestRecord
 
 PROMPT_VERSION = "ppe-v1"
 _GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+_RETRYABLE_STATUS = frozenset({429, 500, 503})
+_MAX_RETRY_DELAY_S = 60.0
+_RETRY_DELAY_RE = re.compile(r'"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"')
+
+
+def _retry_delay_s(error_body: str, attempt: int) -> float | None:
+    """Honour Gemini's RetryInfo hint, else exponential backoff.
+
+    Returns None when the hint exceeds the cap: that is a daily quota window,
+    and waiting it out inside a pipeline run is pointless.
+    """
+    match = _RETRY_DELAY_RE.search(error_body)
+    if match:
+        hinted = float(match.group(1)) + 1.0
+        return hinted if hinted <= _MAX_RETRY_DELAY_S else None
+    return min(2.0 * (2**attempt), _MAX_RETRY_DELAY_S)
+
 
 _PROMPT = """You are a construction safety inspector reviewing a CCTV image crop of a single worker.
 
@@ -62,7 +81,7 @@ def _crop_hash(jpeg: bytes) -> str:
 class AdjudicationResult:
     """PPE state returned by the Gemini adjudicator for one person crop."""
 
-    __slots__ = ("helmet", "vest", "raw_json", "latency_ms", "cached")
+    __slots__ = ("helmet", "vest", "raw_json", "latency_ms", "cached", "error")
 
     def __init__(
         self,
@@ -72,12 +91,14 @@ class AdjudicationResult:
         raw_json: str,
         latency_ms: int,
         cached: bool,
+        error: str | None = None,
     ) -> None:
         self.helmet = helmet
         self.vest = vest
         self.raw_json = raw_json
         self.latency_ms = latency_ms
         self.cached = cached
+        self.error = error
 
 
 def _parse_result(raw: str) -> AdjudicationResult:
@@ -101,13 +122,19 @@ def _parse_result(raw: str) -> AdjudicationResult:
     )
 
 
-def _unknown_result(raw_json: str, *, latency_ms: int = 0) -> AdjudicationResult:
+def _unknown_result(
+    error: str, *, raw: str | None = None, latency_ms: int = 0
+) -> AdjudicationResult:
+    payload: dict[str, str] = {"error": error}
+    if raw is not None:
+        payload["raw"] = raw
     return AdjudicationResult(
         helmet=HelmetRecord(state=HelmetState.UNKNOWN, confidence=0.0, visible=False),
         vest=VestRecord(state=VestState.UNKNOWN, confidence=0.0, visible=False),
-        raw_json=raw_json,
+        raw_json=json.dumps(payload),
         latency_ms=latency_ms,
         cached=False,
+        error=error,
     )
 
 
@@ -127,6 +154,8 @@ class GeminiPPEAdjudicator:
         *,
         cache_dir: Path | None = None,
         timeout_s: int = 30,
+        max_retries: int = 4,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         if not api_key:
             raise ValueError("GEMINI_API_KEY is required for GeminiPPEAdjudicator")
@@ -134,6 +163,9 @@ class GeminiPPEAdjudicator:
         self._model = model
         self._cache_dir = cache_dir
         self._timeout = timeout_s
+        self._max_retries = max_retries
+        self._sleep = sleep
+        self._quota_error: str | None = None
         if cache_dir:
             cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -147,20 +179,21 @@ class GeminiPPEAdjudicator:
             if cached is not None:
                 return cached
 
+        if self._quota_error is not None:
+            return _unknown_result(self._quota_error)
+
         t0 = time.monotonic()
         try:
             raw = self._call_gemini(jpeg)
         except (RuntimeError, URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
             latency_ms = int((time.monotonic() - t0) * 1000)
-            return _unknown_result(json.dumps({"error": str(exc)}), latency_ms=latency_ms)
+            return _unknown_result(str(exc), latency_ms=latency_ms)
         latency_ms = int((time.monotonic() - t0) * 1000)
 
         try:
             result = _parse_result(raw)
         except (json.JSONDecodeError, ValueError, KeyError) as exc:
-            return _unknown_result(
-                json.dumps({"error": str(exc), "raw": raw}), latency_ms=latency_ms
-            )
+            return _unknown_result(str(exc), raw=raw, latency_ms=latency_ms)
         result.cached = False
         result.latency_ms = latency_ms
 
@@ -197,12 +230,24 @@ class GeminiPPEAdjudicator:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        try:
-            with urlopen(req, timeout=self._timeout) as response:
-                data = json.loads(response.read())
-        except HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"Gemini {self._model} failed {exc.code}: {detail}") from exc
+        attempt = 0
+        while True:
+            try:
+                with urlopen(req, timeout=self._timeout) as response:
+                    data = json.loads(response.read())
+                break
+            except HTTPError as exc:
+                detail = exc.read().decode("utf-8", errors="replace")
+                delay = _retry_delay_s(detail, attempt)
+                if exc.code in _RETRYABLE_STATUS and delay is not None:
+                    if attempt < self._max_retries:
+                        self._sleep(delay)
+                        attempt += 1
+                        continue
+                message = f"Gemini {self._model} failed {exc.code}: {detail}"
+                if exc.code == 429:
+                    self._quota_error = message
+                raise RuntimeError(message) from exc
         candidates = data.get("candidates") or []
         if not candidates:
             raise RuntimeError(f"Gemini returned no candidates: {json.dumps(data)[:200]}")

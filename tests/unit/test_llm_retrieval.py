@@ -2,12 +2,47 @@ from __future__ import annotations
 
 from llm.regulations import BOOTSTRAP_CLAUSES
 from llm.retrieval import (
+    _mmr_rerank,
     retrieve_clauses,
     retrieve_clauses_dense,
     retrieve_clauses_hybrid,
     retrieve_clauses_lexical,
 )
 from shared.enums import RuleId
+from shared.schemas.llm import RetrievalHit
+
+
+def _rrf_scaled_hits(count: int) -> list[RetrievalHit]:
+    chunks = [c for c in BOOTSTRAP_CLAUSES if RuleId.R1 in c.rule_ids][:count]
+    return [
+        RetrievalHit(
+            chunk=chunk,
+            score=1.0 / (60 + rank),
+            lexical_score=0.0,
+            semantic_hint_score=0.0,
+            rank=rank,
+        )
+        for rank, chunk in enumerate(chunks, start=1)
+    ]
+
+
+def test_mmr_keeps_relevance_order_at_rrf_scale_when_chunks_are_distinct():
+    hits = _rrf_scaled_hits(5)
+    # Orthogonal embeddings: no redundancy, so MMR must not reorder by diversity alone.
+    embeddings = {
+        hit.chunk.chunk_id: [1.0 if i == j else 0.0 for j in range(5)] for i, hit in enumerate(hits)
+    }
+    reranked = _mmr_rerank(hits, top_k=3, embeddings=embeddings)
+    assert [h.chunk.chunk_id for h in reranked] == [h.chunk.chunk_id for h in hits[:3]]
+    assert [h.rank for h in reranked] == [1, 2, 3]
+
+
+def test_mmr_demotes_near_duplicate_of_top_hit():
+    hits = _rrf_scaled_hits(3)
+    top, duplicate, distinct = (h.chunk.chunk_id for h in hits)
+    embeddings = {top: [1.0, 0.0], duplicate: [1.0, 0.0], distinct: [0.0, 1.0]}
+    reranked = _mmr_rerank(hits, top_k=2, embeddings=embeddings)
+    assert [h.chunk.chunk_id for h in reranked] == [top, distinct]
 
 
 def test_lexical_retrieval_returns_correct_rule():
