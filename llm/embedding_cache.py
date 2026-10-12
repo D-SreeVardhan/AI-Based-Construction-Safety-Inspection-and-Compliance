@@ -1,8 +1,8 @@
 """Lazy singleton cache for corpus embeddings.
 
-On first access, attempts to load 768-dim vectors from Supabase ``clause_chunks``.
+On first access, loads 768-dim vectors from Supabase ``clause_chunks``.
 If Supabase is not configured or the fetch fails, returns an empty dict so
-retrieval falls back to lexical-only mode — the system degrades gracefully.
+retrieval falls back to lexical-only mode.
 
 Usage::
 
@@ -12,70 +12,55 @@ Usage::
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import threading
-from typing import Final
+import time
+
+from cloud.corpus_sync import fetch_embeddings_from_supabase
+
+# A failed fetch is retried after this long instead of pinning a long-running
+# server to lexical-only retrieval until restart.
+FAILURE_RETRY_S = 60.0
 
 _log = logging.getLogger(__name__)
 _lock = threading.Lock()
 _cache: dict[str, list[float]] | None = None
-_SENTINEL: Final = object()
-
-
-def _load_from_supabase() -> dict[str, list[float]]:
-    """Fetch all embeddings from Supabase clause_chunks."""
-    # Inline import to avoid hard dependency on cloud at import time
-    from cloud.config import load_cloud_config  # noqa: PLC0415
-    from cloud.supabase import SupabaseClient  # noqa: PLC0415
-
-    config = load_cloud_config()
-    client = SupabaseClient(config)
-    rows = client.select("clause_chunks", select="id,embedding")
-    result: dict[str, list[float]] = {}
-    for row in rows:
-        vec = row.get("embedding")
-        if isinstance(vec, list):
-            result[row["id"]] = [float(v) for v in vec]
-        elif isinstance(vec, str):
-            try:
-                parsed = json.loads(vec)
-                if isinstance(parsed, list):
-                    result[row["id"]] = [float(v) for v in parsed]
-            except (json.JSONDecodeError, ValueError):
-                pass
-    return result
+_failed_at: float | None = None
 
 
 def get_embeddings() -> dict[str, list[float]]:
-    """Return the cached corpus embedding dict, loading once on first call.
+    """Return the cached corpus embedding dict, loading on first call.
 
     Returns an empty dict if Supabase is unreachable or not configured.
-    Dense retrieval is silently disabled in that case.
+    Dense retrieval is disabled in that case.
     """
-    global _cache  # noqa: PLW0603
+    global _cache, _failed_at  # noqa: PLW0603
     if _cache is not None:
         return _cache
     with _lock:
         if _cache is not None:
             return _cache
-        supabase_url = os.environ.get("SUPABASE_URL") or os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
-        if not supabase_url:
-            _log.debug("SUPABASE_URL not set — dense retrieval disabled")
+        if not (os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_SERVICE_ROLE_KEY")):
+            _log.info("Supabase not configured; dense retrieval disabled")
             _cache = {}
             return _cache
+        if _failed_at is not None and time.monotonic() - _failed_at < FAILURE_RETRY_S:
+            return {}
         try:
-            _cache = _load_from_supabase()
+            _cache = fetch_embeddings_from_supabase()
+            _failed_at = None
             _log.info("Loaded %d clause embeddings from Supabase", len(_cache))
         except Exception as exc:  # noqa: BLE001
-            _log.warning("Could not load embeddings from Supabase (%s) — using lexical-only", exc)
-            _cache = {}
+            _failed_at = time.monotonic()
+            _log.warning("Could not load embeddings from Supabase (%s); using lexical-only", exc)
+            return {}
     return _cache
 
 
 def invalidate() -> None:
     """Clear the cache so the next call to ``get_embeddings()`` re-fetches."""
-    global _cache  # noqa: PLW0603
+    global _cache, _failed_at  # noqa: PLW0603
     with _lock:
         _cache = None
+        _failed_at = None

@@ -14,7 +14,7 @@ import cv2
 
 from llm.adjudicator import GeminiPPEAdjudicator
 from llm.regulations import CATALOGUE_SHA256
-from llm.retrieval import build_grounded_briefing
+from llm.retrieval import RETRIEVAL_MODE, build_grounded_briefing
 from pipeline.intake import FrameSampler
 from pipeline.report import build_report_html
 from pipeline.rules.engine import evaluate_fake_rules, evaluate_real_rules
@@ -39,6 +39,14 @@ def _utc_now() -> datetime:
 
 def _iso(ts: datetime) -> str:
     return ts.isoformat().replace("+00:00", "Z")
+
+
+def _gemini_status(*, has_key: bool, failed: int, total: int) -> str:
+    if not has_key:
+        return "no_key"
+    if failed == 0:
+        return "ok"
+    return "failed" if failed >= total else "degraded"
 
 
 FULL_HASH_BELOW_BYTES = 64 * 1024 * 1024
@@ -504,10 +512,10 @@ class RealPipelineJob:
         )
         self._write_json(self.run_dir / "job.json", job)
 
-        # Build track-level adjudication: update observations in place
-        obs_by_track: dict[str, list] = {}
-        for obs in observations:
-            obs_by_track.setdefault(obs.canonical_track_id, []).append(obs)
+        # Observations are frozen; index by track so adjudicated copies replace originals.
+        obs_by_track: dict[str, list[int]] = {}
+        for index, obs in enumerate(observations):
+            obs_by_track.setdefault(obs.canonical_track_id, []).append(index)
 
         adjudicator = (
             GeminiPPEAdjudicator(
@@ -519,6 +527,9 @@ class RealPipelineJob:
             else None
         )
 
+        min_height = self.config.ppe.minimum_person_height_px
+        adjudication_errors: list[str] = []
+        too_small = 0
         for crop in crops:
             # Write crop to disk
             rel_crop_path = (
@@ -529,15 +540,25 @@ class RealPipelineJob:
             cv2.imwrite(str(abs_crop), crop.crop_bgr)
             if adjudicator is None:
                 continue
+            # Below this height a helmet is a handful of pixels; models guess a violation.
+            if crop.crop_bgr.shape[0] < min_height:
+                too_small += 1
+                continue
             result = adjudicator.assess(crop.crop_bgr)
+            if result.error is not None:
+                adjudication_errors.append(result.error)
             # Patch matching observations in the same track near this frame
-            track_obs = obs_by_track.get(crop.canonical_track_id, [])
-            for obs in track_obs:
-                if abs(obs.video_time_s - crop.video_time_s) <= self.ppe_sample_interval_s / 2:
-                    if obs.helmet is not None:
-                        obs.helmet = result.helmet
-                    if obs.vest is not None:
-                        obs.vest = result.vest
+            for index in obs_by_track.get(crop.canonical_track_id, []):
+                obs = observations[index]
+                if abs(obs.video_time_s - crop.video_time_s) > self.ppe_sample_interval_s / 2:
+                    continue
+                update: dict[str, object] = {}
+                if obs.helmet is not None:
+                    update["helmet"] = result.helmet
+                if obs.vest is not None:
+                    update["vest"] = result.vest
+                if update:
+                    observations[index] = obs.model_copy(update=update)
 
         # Write tracks
         tracks_path = self.run_dir / "tracks.jsonl"
@@ -630,6 +651,18 @@ class RealPipelineJob:
                 "GEMINI_API_KEY not set — all PPE assessments returned UNKNOWN. "
                 "R1/R2 alerts will be empty."
             )
+        adjudicated = len(crops) - too_small
+        if too_small:
+            run_warnings.append(
+                f"{too_small} of {len(crops)} person crops were shorter than {min_height} px "
+                "and were not sent to Gemini (PPE left UNKNOWN for those frames)."
+            )
+        if adjudication_errors:
+            run_warnings.append(
+                f"Gemini PPE assessment failed for {len(adjudication_errors)} of {adjudicated} "
+                f"crops (left UNKNOWN; R1/R2 may under-report). First error: "
+                f"{adjudication_errors[0][:160]}"
+            )
 
         manifest = RunManifest(
             run_id=self.run_id,
@@ -641,12 +674,16 @@ class RealPipelineJob:
             model_ids={
                 "stage1": str(self.config.stage1.model_path),
                 "ppe": f"gemini/{self.config.scene.gemini_model}",
-                "rag": "local-bm25-alias-bootstrap",
+                "rag": RETRIEVAL_MODE,
                 "briefing": "deterministic-grounded-briefing-v1",
             },
             dependency_versions={"pipeline": "real-0.2.0"},
             prompt_versions={"briefing_template": "deterministic-v1", "ppe": "ppe-v1"},
-            gemini_status="ok" if self.gemini_api_key else "no_key",
+            gemini_status=_gemini_status(
+                has_key=bool(self.gemini_api_key),
+                failed=len(adjudication_errors),
+                total=adjudicated,
+            ),
             scene_cache_status="none",
             rule_coverage=coverage,
             warnings=tuple(run_warnings),
@@ -680,3 +717,29 @@ class RealPipelineJob:
         else:
             data = payload
         path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def create_pipeline_job(
+    input_video: Path,
+    *,
+    output_root: Path | None = None,
+    run_id: str | None = None,
+    skip_video: bool = False,
+    force_fake: bool = False,
+) -> FakePipelineJob | RealPipelineJob:
+    """Select the real pipeline when a Gemini key is configured, else the fixture pipeline."""
+    gemini_key = os.environ.get("GEMINI_API_KEY", "")
+    if gemini_key and not force_fake:
+        return RealPipelineJob(
+            input_video,
+            output_root=output_root,
+            run_id=run_id,
+            skip_video=skip_video,
+            gemini_api_key=gemini_key,
+        )
+    return FakePipelineJob(
+        input_video,
+        output_root=output_root,
+        run_id=run_id,
+        skip_video=skip_video,
+    )

@@ -108,13 +108,16 @@ def _mmr_rerank(
 
     remaining = list(candidates)
     selected: list[RetrievalHit] = []
+    # RRF scores (~0.03) and BM25 scores (~1-3) must share the [0, 1] scale of the
+    # similarity penalty, otherwise lambda stops meaning anything.
+    max_score = max(hit.score for hit in candidates) or 1.0
 
     while remaining and len(selected) < top_k:
         best_idx = -1
         best_score = float("-inf")
 
         for idx, hit in enumerate(remaining):
-            relevance = hit.score
+            relevance = hit.score / max_score
 
             if not selected:
                 mmr_score = relevance

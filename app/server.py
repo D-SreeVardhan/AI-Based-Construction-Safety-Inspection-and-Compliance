@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from app.window import VIDEO_SUFFIXES, is_video_path
-from jobs.pipeline_job import FakePipelineJob, RealPipelineJob
+from jobs.pipeline_job import create_pipeline_job
 from llm.embedding_cache import get_embeddings
 from llm.qa import answer_run_question
 from shared.schemas.incidents import IncidentRecord
@@ -87,20 +87,11 @@ class DeskHandler(BaseHTTPRequestHandler):
 
     def _run_and_reply(self, video_path: Path, *, skip_video: bool) -> None:
         try:
-            gemini_key = os.environ.get("GEMINI_API_KEY", "")
-            if gemini_key:
-                job: FakePipelineJob | RealPipelineJob = RealPipelineJob(
-                    video_path,
-                    output_root=self.output_root,
-                    skip_video=skip_video,
-                    gemini_api_key=gemini_key,
-                )
-            else:
-                job = FakePipelineJob(
-                    video_path,
-                    output_root=self.output_root,
-                    skip_video=skip_video,
-                )
+            job = create_pipeline_job(
+                video_path,
+                output_root=self.output_root,
+                skip_video=skip_video,
+            )
             manifest = job.run()
         except Exception as exc:
             self._send_json(500, {"error": str(exc)})

@@ -19,7 +19,7 @@ reviewable in a live Hugging Face Space with a Gemini-powered Q&A interface.
 |---|---|
 | **Intake** | Samples frames from any MP4 via OpenCV; letterboxes to model input size |
 | **Detection** | YOLO11n detects persons and vehicles; ByteTrack assigns persistent track IDs |
-| **PPE adjudication** | Gemini Vision assesses helmet and vest state per crop (SHA-256 disk cache) |
+| **PPE adjudication** | Gemini Vision assesses helmet and vest state per crop (per-run SHA-256 cache, 429 retry, fail-fast on daily quota) |
 | **Rule engine** | R1–R5 hazard rules evaluated against real tracks; debounce and severity thresholds |
 | **Regulation RAG** | 27-clause BOCW Central Rules corpus in Supabase; hybrid BM25 + Gemini-embedding-001 (768-dim) retrieval via Reciprocal Rank Fusion + MMR deduplication |
 | **Grounded briefings** | Deterministic template grounded to retrieved clauses; ungrounded sentences refused |
@@ -87,7 +87,8 @@ uv run pytest tests/
 # Check system status
 uv run safety-twin status
 
-# Process a clip (uses RealPipelineJob when GEMINI_API_KEY is set)
+# Process a clip: real YOLO + Gemini pipeline when GEMINI_API_KEY is set in .env,
+# synthetic fixture pipeline otherwise (force it with --fake)
 uv run safety-twin process path/to/clip.mp4
 
 # Open the local review UI at http://127.0.0.1:8765/
@@ -102,9 +103,20 @@ incidents.json      incident records with timestamps, confidence, track ids
 briefings.json      regulation-grounded briefings with clause citations
 tracks.jsonl        per-frame track observations
 report.html         self-contained HTML report with provenance block
-safety_twin.mp4     annotated side-by-side video
-evidence/           Gemini PPE crop images (SHA-256 cached)
+safety_twin.mp4     placeholder twin video (annotated rendering not implemented yet)
+crops/              person crops sent to Gemini for PPE assessment
+evidence/           per-incident evidence placeholders
 ```
+
+**Gemini model and quota:** PPE adjudication and Q&A both use `scene.gemini_model` in
+`config/defaults.yaml` (default `gemini-3.5-flash-lite`). Free-tier limits are per project
+and per model; check the current numbers in AI Studio. Person crops shorter than
+`ppe.minimum_person_height_px` (160) are not sent to Gemini, because at that size models
+guess a violation instead of answering `unknown`; on the 30 s yard clip this sends 10 of
+17 crops. When the quota is exhausted the run still completes: R1/R2 report
+`inconclusive (no_ppe_evidence)`, `gemini_status` is `failed`, and the manifest and report
+carry a warning. Q&A falls back to deterministic answers (trace starts with
+`gemini_qa_failed`) that quote the retrieved BOCW clauses.
 
 ---
 
@@ -179,7 +191,7 @@ The Q&A stack uses a three-stage hybrid pipeline:
 3. **RRF fusion** — Reciprocal Rank Fusion (k=60) merges the two ranked lists.
 4. **MMR reranking** — Maximal Marginal Relevance (λ=0.6) diversifies the top-k results
    so near-duplicate clauses do not fill all slots.
-5. **Gemini QA** — `gemini-2.5-flash` generates a 2–4 sentence answer grounded to the
+5. **Gemini QA** — the configured `scene.gemini_model` generates a 2–4 sentence answer grounded to the
    context block (incidents + coverage + retrieved clauses).
 6. **Grounding post-pass** — trigram overlap between answer and context. Answers with
    < 8% overlap receive a visible low-evidence warning.
