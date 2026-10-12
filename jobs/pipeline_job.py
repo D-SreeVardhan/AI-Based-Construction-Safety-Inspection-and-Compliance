@@ -14,7 +14,7 @@ import cv2
 
 from llm.adjudicator import GeminiPPEAdjudicator
 from llm.regulations import CATALOGUE_SHA256
-from llm.retrieval import build_grounded_briefing
+from llm.retrieval import RETRIEVAL_MODE, build_grounded_briefing
 from pipeline.intake import FrameSampler
 from pipeline.report import build_report_html
 from pipeline.rules.engine import evaluate_fake_rules, evaluate_real_rules
@@ -527,7 +527,9 @@ class RealPipelineJob:
             else None
         )
 
+        min_height = self.config.ppe.minimum_person_height_px
         adjudication_errors: list[str] = []
+        too_small = 0
         for crop in crops:
             # Write crop to disk
             rel_crop_path = (
@@ -537,6 +539,10 @@ class RealPipelineJob:
             abs_crop.parent.mkdir(parents=True, exist_ok=True)
             cv2.imwrite(str(abs_crop), crop.crop_bgr)
             if adjudicator is None:
+                continue
+            # Below this height a helmet is a handful of pixels; models guess a violation.
+            if crop.crop_bgr.shape[0] < min_height:
+                too_small += 1
                 continue
             result = adjudicator.assess(crop.crop_bgr)
             if result.error is not None:
@@ -645,9 +651,15 @@ class RealPipelineJob:
                 "GEMINI_API_KEY not set — all PPE assessments returned UNKNOWN. "
                 "R1/R2 alerts will be empty."
             )
+        adjudicated = len(crops) - too_small
+        if too_small:
+            run_warnings.append(
+                f"{too_small} of {len(crops)} person crops were shorter than {min_height} px "
+                "and were not sent to Gemini (PPE left UNKNOWN for those frames)."
+            )
         if adjudication_errors:
             run_warnings.append(
-                f"Gemini PPE assessment failed for {len(adjudication_errors)} of {len(crops)} "
+                f"Gemini PPE assessment failed for {len(adjudication_errors)} of {adjudicated} "
                 f"crops (left UNKNOWN; R1/R2 may under-report). First error: "
                 f"{adjudication_errors[0][:160]}"
             )
@@ -662,7 +674,7 @@ class RealPipelineJob:
             model_ids={
                 "stage1": str(self.config.stage1.model_path),
                 "ppe": f"gemini/{self.config.scene.gemini_model}",
-                "rag": "local-bm25-alias-bootstrap",
+                "rag": RETRIEVAL_MODE,
                 "briefing": "deterministic-grounded-briefing-v1",
             },
             dependency_versions={"pipeline": "real-0.2.0"},
@@ -670,7 +682,7 @@ class RealPipelineJob:
             gemini_status=_gemini_status(
                 has_key=bool(self.gemini_api_key),
                 failed=len(adjudication_errors),
-                total=len(crops),
+                total=adjudicated,
             ),
             scene_cache_status="none",
             rule_coverage=coverage,

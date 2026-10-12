@@ -41,6 +41,8 @@ def test_fingerprint_samples_large_files(tmp_path: Path) -> None:
 class _OneWorkerDetector:
     """Stage-1 stub: one person track observed for 2 s with a single PPE crop at t=0."""
 
+    crop_height = 240
+
     def __init__(self, *_args, **_kwargs) -> None:
         pass
 
@@ -66,7 +68,7 @@ class _OneWorkerDetector:
             frame_index=0,
             video_time_s=0.0,
             box=box,
-            crop_bgr=np.zeros((80, 40, 3), dtype=np.uint8),
+            crop_bgr=np.zeros((self.crop_height, self.crop_height // 2, 3), dtype=np.uint8),
         )
         return observations, [crop]
 
@@ -149,7 +151,7 @@ def test_real_pipeline_warns_when_adjudication_fails(
                 raw_json='{"error": "429"}',
                 latency_ms=1,
                 cached=False,
-                error="Gemini gemini-2.5-flash failed 429: quota",
+                error="Gemini gemini-3.5-flash-lite failed 429: quota",
             )
 
     monkeypatch.setattr("jobs.pipeline_job.Stage1Detector", _OneWorkerDetector)
@@ -164,6 +166,31 @@ def test_real_pipeline_warns_when_adjudication_fails(
     assert "429" in warning
     report = (job.run_dir / "report.html").read_text(encoding="utf-8")
     assert "PPE assessment failed" in report
+
+
+def test_real_pipeline_skips_gemini_for_crops_below_min_height(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class TinyWorkerDetector(_OneWorkerDetector):
+        crop_height = 80
+
+    class ExplodingAdjudicator:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def assess(self, _crop) -> AdjudicationResult:
+            raise AssertionError("crops below minimum_person_height_px must not reach Gemini")
+
+    monkeypatch.setattr("jobs.pipeline_job.Stage1Detector", TinyWorkerDetector)
+    monkeypatch.setattr("jobs.pipeline_job.GeminiPPEAdjudicator", ExplodingAdjudicator)
+
+    job = _run_real(tmp_path, "run-tiny", gemini_api_key="test-key")
+    manifest = job.run()
+
+    assert manifest.gemini_status == "ok"
+    assert any("1 of 1 person crops were shorter than 160 px" in w for w in manifest.warnings)
+    assert all(t["helmet"]["state"] == "unknown" for t in _tracks(job))
+    assert (job.run_dir / "crops" / "shot-0-person-1-f0.jpg").exists()
 
 
 def test_create_pipeline_job_selects_by_gemini_key(

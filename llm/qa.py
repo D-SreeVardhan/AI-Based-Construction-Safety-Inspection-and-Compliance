@@ -9,9 +9,10 @@ from urllib.request import Request, urlopen
 from llm.embeddings import embed_query
 from llm.regulations import BOOTSTRAP_CLAUSES
 from llm.retrieval import TOKEN_RE, retrieve_clauses_hybrid
+from shared.config import load_config
 from shared.enums import RuleId, RuleStatus
 from shared.schemas.incidents import IncidentRecord
-from shared.schemas.llm import GroundedBriefing, RunQuestionAnswer
+from shared.schemas.llm import GroundedBriefing, RetrievalHit, RunQuestionAnswer
 from shared.schemas.run import RuleCoverageEntry
 
 LEGAL_VERDICT_TERMS = (
@@ -155,7 +156,7 @@ def _call_gemini_qa(
     question: str,
     context: str,
     api_key: str,
-    model: str = "gemini-2.5-flash",
+    model: str,
     timeout_s: int = 30,
 ) -> str:
     url = f"{_GEMINI_BASE}/{model}:generateContent?key={api_key}"
@@ -187,6 +188,7 @@ def answer_run_question(
     briefings: tuple[GroundedBriefing, ...],
     gemini_api_key: str | None = None,
     embeddings: dict[str, list[float]] | None = None,
+    gemini_model: str | None = None,
 ) -> RunQuestionAnswer:
     """Answer a question about a completed run.
 
@@ -250,6 +252,7 @@ def answer_run_question(
                 question=clean_question,
                 context=context,
                 api_key=api_key,
+                model=gemini_model or load_config().scene.gemini_model,
             )
             overlap = _grounding_overlap(answer, context)
             low_confidence = overlap < 0.08
@@ -273,10 +276,25 @@ def answer_run_question(
                 cited_clause_ids=tuple(h.chunk.chunk_id for h in retrieved),
             )
         except (RuntimeError, OSError, TimeoutError):
-            # Gemini unavailable — fall through to deterministic path
-            pass
+            fallback = _deterministic_answer(
+                clean_question, rule_id, retrieved, coverage, incidents, briefings
+            )
+            return fallback.model_copy(
+                update={"tool_trace": ("gemini_qa_failed", *fallback.tool_trace)}
+            )
 
-    # ── Deterministic fallback ──────────────────────────────────────────────
+    return _deterministic_answer(clean_question, rule_id, retrieved, coverage, incidents, briefings)
+
+
+def _deterministic_answer(
+    clean_question: str,
+    rule_id: RuleId | None,
+    retrieved: tuple[RetrievalHit, ...],
+    coverage: tuple[RuleCoverageEntry, ...],
+    incidents: tuple[IncidentRecord, ...],
+    briefings: tuple[GroundedBriefing, ...],
+) -> RunQuestionAnswer:
+    lowered = clean_question.lower()
     if retrieved and any(term in lowered for term in REGULATION_TERMS):
         quoted = " ".join(f"[{hit.chunk.clause_ref}] {hit.chunk.text}" for hit in retrieved[:2])
         return RunQuestionAnswer(

@@ -150,7 +150,7 @@ class GeminiPPEAdjudicator:
     def __init__(
         self,
         api_key: str,
-        model: str = "gemini-2.5-flash",
+        model: str = "gemini-3.5-flash-lite",
         *,
         cache_dir: Path | None = None,
         timeout_s: int = 30,

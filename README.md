@@ -108,11 +108,15 @@ crops/              person crops sent to Gemini for PPE assessment
 evidence/           per-incident evidence placeholders
 ```
 
-**Gemini free tier:** `gemini-2.5-flash` allows 20 requests/day per project, shared by
-PPE adjudication and Q&A. One 30 s clip uses roughly 17 PPE requests. When the quota is
-exhausted the run still completes: R1/R2 report `inconclusive (no_ppe_evidence)`,
-`gemini_status` is `failed`, and the manifest and report carry a warning. Q&A falls back
-to deterministic answers that quote the retrieved BOCW clauses.
+**Gemini model and quota:** PPE adjudication and Q&A both use `scene.gemini_model` in
+`config/defaults.yaml` (default `gemini-3.5-flash-lite`). Free-tier limits are per project
+and per model; check the current numbers in AI Studio. Person crops shorter than
+`ppe.minimum_person_height_px` (160) are not sent to Gemini, because at that size models
+guess a violation instead of answering `unknown`; on the 30 s yard clip this sends 10 of
+17 crops. When the quota is exhausted the run still completes: R1/R2 report
+`inconclusive (no_ppe_evidence)`, `gemini_status` is `failed`, and the manifest and report
+carry a warning. Q&A falls back to deterministic answers (trace starts with
+`gemini_qa_failed`) that quote the retrieved BOCW clauses.
 
 ---
 
@@ -187,7 +191,7 @@ The Q&A stack uses a three-stage hybrid pipeline:
 3. **RRF fusion** — Reciprocal Rank Fusion (k=60) merges the two ranked lists.
 4. **MMR reranking** — Maximal Marginal Relevance (λ=0.6) diversifies the top-k results
    so near-duplicate clauses do not fill all slots.
-5. **Gemini QA** — `gemini-2.5-flash` generates a 2–4 sentence answer grounded to the
+5. **Gemini QA** — the configured `scene.gemini_model` generates a 2–4 sentence answer grounded to the
    context block (incidents + coverage + retrieved clauses).
 6. **Grounding post-pass** — trigram overlap between answer and context. Answers with
    < 8% overlap receive a visible low-evidence warning.

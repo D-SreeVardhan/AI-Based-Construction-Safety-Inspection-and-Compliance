@@ -4,6 +4,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 from llm.qa import _grounding_overlap, answer_run_question
+from shared.config import load_config
 from shared.enums import RuleId, RuleStatus
 from shared.schemas.incidents import IncidentRecord
 from shared.schemas.run import RuleCoverageEntry
@@ -113,7 +114,7 @@ def test_gemini_qa_path_called_when_key_present():
     ).encode()
 
     with (
-        patch("llm.qa.urlopen", return_value=mock_response),
+        patch("llm.qa.urlopen", return_value=mock_response) as mock_urlopen,
         patch(
             "llm.qa.embed_query",
             return_value=[0.1] * 768,
@@ -129,6 +130,8 @@ def test_gemini_qa_path_called_when_key_present():
     assert result.refused is False
     assert "gemini_qa" in result.tool_trace
     assert "helmet" in result.answer.lower()
+    request = mock_urlopen.call_args.args[0]
+    assert f"/{load_config().scene.gemini_model}:generateContent" in request.full_url
 
 
 def test_gemini_qa_falls_back_on_error():
@@ -146,6 +149,8 @@ def test_gemini_qa_falls_back_on_error():
     # Should fall through to deterministic
     assert result.refused is False
     assert "R1" in result.answer
+    assert result.tool_trace[0] == "gemini_qa_failed"
+    assert "gemini_qa" not in result.tool_trace
 
 
 def test_grounding_overlap_scores_copied_vs_invented_text():
