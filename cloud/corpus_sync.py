@@ -8,13 +8,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import os
-import sys
 
-from cloud.config import CloudConfig
+from cloud.config import CloudConfig, load_cloud_config, load_dotenv
 from cloud.supabase import SupabaseClient
 from llm.embeddings import embed_batch
-from llm.regulations import BOOTSTRAP_CLAUSES, CATALOGUE_SHA256
+from llm.regulations import BOOTSTRAP_CLAUSES, CATALOGUE_SHA256, EMBEDDING_MODEL
 
 _SLEEP_BETWEEN_BATCH_S = 1.0
 
@@ -36,27 +36,33 @@ def _build_row(chunk, embedding: list[float] | None) -> dict:
 
 
 def sync_corpus(*, dry_run: bool = False) -> None:
+    load_dotenv()
     api_key = os.environ.get("GEMINI_API_KEY", "")
     if not api_key and not dry_run:
-        print("GEMINI_API_KEY not set — will upsert clauses without embeddings.", file=sys.stderr)
+        raise RuntimeError(
+            "GEMINI_API_KEY is required for corpus sync. "
+            "Refusing to upsert clause_chunks without embeddings."
+        )
 
     config: CloudConfig | None = None
     client: SupabaseClient | None = None
     if not dry_run:
-        config = CloudConfig.from_env()
+        config = load_cloud_config()
         client = SupabaseClient(config)
 
     texts = [f"{c.clause_ref} {c.title} {c.text}" for c in BOOTSTRAP_CLAUSES]
     embeddings: list[list[float] | None] = [None] * len(texts)
 
     if api_key and not dry_run:
-        print(f"Embedding {len(texts)} clauses via Gemini text-embedding-004 …")
+        print(f"Embedding {len(texts)} clauses via Gemini {EMBEDDING_MODEL} …")
         try:
             vecs = embed_batch(texts, api_key=api_key)
             embeddings = [list(v) for v in vecs]
             print(f"  Done. First vector dim: {len(embeddings[0])}")
         except Exception as exc:
-            print(f"  Embedding failed ({exc}) — upserting without embeddings.", file=sys.stderr)
+            raise RuntimeError(
+                "Embedding failed; refusing to upsert clause_chunks without vectors."
+            ) from exc
 
     rows = [_build_row(chunk, embeddings[i]) for i, chunk in enumerate(BOOTSTRAP_CLAUSES)]
 
@@ -82,7 +88,7 @@ def fetch_embeddings_from_supabase() -> dict[str, list[float]]:
 
     Returns a ``{chunk_id: embedding}`` dict.  Missing or null embeddings are skipped.
     """
-    config = CloudConfig.from_env()
+    config = load_cloud_config()
     client = SupabaseClient(config)
     rows = client.select("clause_chunks", select="id,embedding")
     result: dict[str, list[float]] = {}
@@ -90,6 +96,10 @@ def fetch_embeddings_from_supabase() -> dict[str, list[float]]:
         vec = row.get("embedding")
         if vec and isinstance(vec, list):
             result[row["id"]] = vec
+        elif vec and isinstance(vec, str):
+            parsed = json.loads(vec)
+            if isinstance(parsed, list):
+                result[row["id"]] = [float(value) for value in parsed]
     return result
 
 

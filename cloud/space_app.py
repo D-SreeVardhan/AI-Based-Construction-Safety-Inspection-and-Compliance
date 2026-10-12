@@ -5,6 +5,7 @@ import spaces
 
 from cloud.config import load_cloud_config
 from cloud.supabase import SupabaseClient
+from llm.embedding_cache import get_embeddings
 from llm.qa import answer_run_question
 from shared.schemas.incidents import IncidentRecord
 from shared.schemas.llm import GroundedBriefing
@@ -111,7 +112,8 @@ def ask_run(run_id: str | None, question: str) -> str:
     if not question.strip():
         return "Enter a question."
     try:
-        client = _client()
+        config = load_cloud_config()
+        client = SupabaseClient(config)
         run_rows = client.select("runs", filters={"id": f"eq.{run_id}"}, limit=1)
         if not run_rows:
             return f"No run named `{run_id}`."
@@ -130,6 +132,8 @@ def ask_run(run_id: str | None, question: str) -> str:
             coverage=coverage,
             incidents=incidents,
             briefings=briefings,
+            gemini_api_key=config.gemini_api_key,
+            embeddings=get_embeddings(),
         )
         try:
             client.upsert(

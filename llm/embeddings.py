@@ -28,6 +28,7 @@ def _embed_text(
             "model": f"models/{model}",
             "content": {"parts": [{"text": text}]},
             "taskType": task_type,
+            "outputDimensionality": EMBEDDING_DIM,
         }
     ).encode()
     req = Request(
