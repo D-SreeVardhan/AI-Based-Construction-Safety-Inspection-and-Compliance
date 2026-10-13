@@ -36,15 +36,15 @@ _log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Colour palette (BGR) — avoid the generic blue hue
 # ---------------------------------------------------------------------------
-_C_OK = (60, 200, 60)          # green  — helmet/vest confirmed
-_C_VIOLATION = (40, 40, 220)   # red    — violation confirmed
-_C_UNKNOWN = (40, 180, 220)    # amber  — unknown state
-_C_VEHICLE = (200, 160, 50)    # teal   — vehicle box
-_C_BANNER_BG = (20, 20, 20)    # near-black banner background
+_C_OK = (60, 200, 60)  # green  — helmet/vest confirmed
+_C_VIOLATION = (40, 40, 220)  # red    — violation confirmed
+_C_UNKNOWN = (40, 180, 220)  # amber  — unknown state
+_C_VEHICLE = (200, 160, 50)  # teal   — vehicle box
+_C_BANNER_BG = (20, 20, 20)  # near-black banner background
 _C_BANNER_ALERT = (40, 40, 220)  # red banner for alert
-_C_BANNER_INFO = (130, 90, 30)   # dark amber for info
-_C_TEXT = (240, 240, 240)      # off-white text
-_C_WATERMARK = (80, 80, 80)    # dark grey watermark
+_C_BANNER_INFO = (130, 90, 30)  # dark amber for info
+_C_TEXT = (240, 240, 240)  # off-white text
+_C_WATERMARK = (80, 80, 80)  # dark grey watermark
 
 _FONT = cv2.FONT_HERSHEY_SIMPLEX
 _THICKNESS_BOX = 2
@@ -57,6 +57,7 @@ _BANNER_HOLD_S = 2.0
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _box_colour(helmet_state: str, vest_state: str) -> tuple[int, int, int]:
     """Pick a single box colour representing the worst violation."""
@@ -169,8 +170,10 @@ def _draw_status_panel(
     cv2.addWeighted(overlay, 0.70, roi, 0.30, 0, roi)
     frame[y0 : y0 + panel_h, 6 : 6 + panel_w] = roi
     for i, line in enumerate(lines):
-        fg = _C_VIOLATION if line.startswith("[X]") else (
-            _C_UNKNOWN if line.startswith("[?]") else _C_OK
+        fg = (
+            _C_VIOLATION
+            if line.startswith("[X]")
+            else (_C_UNKNOWN if line.startswith("[?]") else _C_OK)
         )
         y = y0 + pad + (i + 1) * line_h - 2
         cv2.putText(frame, line, (10, y), _FONT, 0.42, fg, 1, cv2.LINE_AA)
@@ -186,6 +189,7 @@ def _draw_watermark(frame: np.ndarray) -> None:
 # ---------------------------------------------------------------------------
 # Index builders
 # ---------------------------------------------------------------------------
+
 
 def _build_track_index(
     tracks: list[dict[str, Any]],
@@ -238,6 +242,7 @@ def _active_incidents(
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def _load_run_artifacts(
     run_dir: Path,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
@@ -270,12 +275,24 @@ def _reencode_h264(output_path: Path, crf: int) -> None:
     tmp = output_path.with_suffix(".tmp.mp4")
     output_path.rename(tmp)
     cmd = [
-        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-        "-i", str(tmp),
-        "-c:v", "libx264", "-crf", str(crf), "-preset", "medium",
-        "-pix_fmt", "yuv420p",
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(tmp),
+        "-c:v",
+        "libx264",
+        "-crf",
+        str(crf),
+        "-preset",
+        "medium",
+        "-pix_fmt",
+        "yuv420p",
         # moov atom first so browsers can start playback before the full download
-        "-movflags", "+faststart",
+        "-movflags",
+        "+faststart",
         str(output_path),
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
@@ -293,9 +310,9 @@ def _reencode_h264(output_path: Path, crf: int) -> None:
 # Map-specific colours (BGR)
 _MAP_BG = (28, 28, 28)
 _MAP_GRID = (52, 52, 52)
-_MAP_VANISH_FRAC = 0.50   # vanishing point x as fraction of map width
-_MAP_FAR_MARGIN = 0.26    # horizontal squeeze at far edge (fraction each side)
-_MAP_NEAR_MARGIN = 0.04   # horizontal margin at near edge (fraction each side)
+_MAP_VANISH_FRAC = 0.50  # vanishing point x as fraction of map width
+_MAP_FAR_MARGIN = 0.26  # horizontal squeeze at far edge (fraction each side)
+_MAP_NEAR_MARGIN = 0.04  # horizontal margin at near edge (fraction each side)
 _PERSON_RADIUS = 12
 _ALERT_RING_RADIUS = 24
 
@@ -435,18 +452,22 @@ def _render_map_pane(
             cv2.fillPoly(canvas, [pts], (40, 60, 70))
             cv2.polylines(canvas, [pts], True, _C_VEHICLE, 2, cv2.LINE_AA)
             label_x, label_y = project((bx1 + bx2) / 2, (by1 + by2) / 2)
-            _put_text_with_bg(canvas, track_short, label_x, label_y, scale=0.36,
-                              fg=_C_VEHICLE)
+            _put_text_with_bg(canvas, track_short, label_x, label_y, scale=0.36, fg=_C_VEHICLE)
 
     if active_incidents:
         banner_text = f"[!] {len(active_incidents)} ALERT(S) ACTIVE"
-        _put_text_with_bg(canvas, banner_text, 8, 44, scale=0.50,
-                          fg=_C_VIOLATION, bg=_C_BANNER_BG, alpha=0.85)
+        _put_text_with_bg(
+            canvas, banner_text, 8, 44, scale=0.50, fg=_C_VIOLATION, bg=_C_BANNER_BG, alpha=0.85
+        )
 
     legend_x = map_w - 96
     legend_y = 16
-    for colour, label in [(_C_VIOLATION, "Violation"), (_C_OK, "PPE OK"),
-                           (_C_UNKNOWN, "Unknown"), (_C_VEHICLE, "Vehicle")]:
+    for colour, label in [
+        (_C_VIOLATION, "Violation"),
+        (_C_OK, "PPE OK"),
+        (_C_UNKNOWN, "Unknown"),
+        (_C_VEHICLE, "Vehicle"),
+    ]:
         cv2.circle(canvas, (legend_x, legend_y), 6, colour, -1, cv2.LINE_AA)
         cv2.putText(canvas, label, (legend_x + 12, legend_y + 4), _FONT, 0.38, _C_TEXT, 1)
         legend_y += 18
@@ -459,6 +480,7 @@ def _render_map_pane(
 # ---------------------------------------------------------------------------
 # Public API: side-by-side twin video
 # ---------------------------------------------------------------------------
+
 
 def render_twin_video(
     *,
@@ -489,8 +511,8 @@ def render_twin_video(
         src_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         src_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-        pane_w = target_width // 2   # 960
-        pane_h = target_height       # 1080
+        pane_w = target_width // 2  # 960
+        pane_h = target_height  # 1080
 
         # Track boxes are stored in the detector canvas (full target size); the
         # left pane shows the same source letterboxed into half the width.
@@ -510,7 +532,11 @@ def render_twin_video(
 
         _log.info(
             "Rendering twin %s → %s (src %.2f fps, step %d, out %.2f fps)",
-            input_video.name, output_path.name, native_fps, step, output_fps,
+            input_video.name,
+            output_path.name,
+            native_fps,
+            step,
+            output_fps,
         )
 
         while True:
@@ -527,8 +553,9 @@ def render_twin_video(
             # ── LEFT PANE: annotated source ──────────────────────────────
             resized_l = cv2.resize(frame, (pane_lb.w, pane_lb.h), interpolation=cv2.INTER_AREA)
             left = np.zeros((pane_h, pane_w, 3), dtype=np.uint8)
-            left[pane_lb.y_off : pane_lb.y_off + pane_lb.h,
-                 pane_lb.x_off : pane_lb.x_off + pane_lb.w] = resized_l
+            left[
+                pane_lb.y_off : pane_lb.y_off + pane_lb.h, pane_lb.x_off : pane_lb.x_off + pane_lb.w
+            ] = resized_l
 
             obs_list = _nearest_obs(by_time, sorted_times, video_time_s)
             active = _active_incidents(incidents, video_time_s)
@@ -567,8 +594,9 @@ def render_twin_video(
 
             _draw_status_panel(left, coverage)
             _draw_watermark(left)
-            _put_text_with_bg(left, f"{video_time_s:.1f}s", pane_w - 54, 18,
-                              scale=0.42, bg=_C_BANNER_BG)
+            _put_text_with_bg(
+                left, f"{video_time_s:.1f}s", pane_w - 54, 18, scale=0.42, bg=_C_BANNER_BG
+            )
 
             # Divider line between panes
             cv2.line(left, (pane_w - 1, 0), (pane_w - 1, pane_h - 1), (60, 60, 60), 2)

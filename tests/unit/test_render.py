@@ -126,8 +126,12 @@ def test_render_twin_video_outputs_side_by_side_frames(tmp_path: Path) -> None:
     output = tmp_path / "twin.mp4"
 
     render_twin_video(
-        input_video=clip, run_dir=run_dir, output_path=output,
-        target_width=640, target_height=360, output_fps=15.0,
+        input_video=clip,
+        run_dir=run_dir,
+        output_path=output,
+        target_width=640,
+        target_height=360,
+        output_fps=15.0,
     )
 
     cap = cv2.VideoCapture(str(output))
