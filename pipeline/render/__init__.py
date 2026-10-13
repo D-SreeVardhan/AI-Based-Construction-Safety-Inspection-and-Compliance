@@ -1,10 +1,9 @@
-"""Twin video renderers.
+"""Twin video renderer.
 
-``render_twin_video`` (used by the pipeline) writes a side-by-side MP4: the
-annotated source on the left and an approximate top-down site map on the right.
-``render_annotated_video`` writes the annotated source alone at full width.
+``render_twin_video`` writes a side-by-side MP4: the annotated source on the
+left and an approximate top-down site map on the right.
 
-Both draw these per-frame overlays on the source:
+The source pane carries these per-frame overlays:
   - Bounding boxes and track labels coloured by PPE state
   - Incident banners with rule ID and severity
   - Rule status panel in the bottom-left corner
@@ -13,9 +12,9 @@ Both draw these per-frame overlays on the source:
 Coordinate assumptions
 ----------------------
 Track boxes in ``tracks.jsonl`` are in the same letterbox space as the
-intake frames (target_width × target_height, default 1920×1080).  The
-full-width renderer draws them directly; the twin's left pane is a smaller
-letterbox of the same source, so boxes are remapped through ``_Letterbox``.
+intake frames (target_width × target_height, default 1920×1080).  The left
+pane is a smaller letterbox of the same source, so boxes are remapped through
+``_Letterbox``.
 """
 
 from __future__ import annotations
@@ -283,141 +282,6 @@ def _reencode_h264(output_path: Path, crf: int) -> None:
         return
     _log.warning("ffmpeg re-encode failed, keeping mp4v output: %s", result.stderr[:300])
     tmp.replace(output_path)
-
-
-def render_annotated_video(
-    *,
-    input_video: Path,
-    run_dir: Path,
-    output_path: Path,
-    target_width: int = 1920,
-    target_height: int = 1080,
-    output_fps: float = 15.0,
-) -> None:
-    """Render an annotated twin video for the completed run in *run_dir*.
-
-    Reads ``tracks.jsonl``, ``incidents.json``, and ``run_manifest.json``
-    from *run_dir*.  Writes an H.264 MP4 to *output_path*.
-    """
-    tracks, incidents, coverage = _load_run_artifacts(run_dir)
-    by_time = _build_track_index(tracks)
-    sorted_times = sorted(by_time)
-
-    cap = cv2.VideoCapture(str(input_video))
-    if not cap.isOpened():
-        raise RuntimeError(f"Cannot open source video: {input_video}")
-
-    try:
-        native_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
-        src_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        src_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-        # Letterbox geometry — mirrors pipeline/intake
-        scale = min(target_width / src_w, target_height / src_h)
-        lb_w = round(src_w * scale)
-        lb_h = round(src_h * scale)
-        x_off = (target_width - lb_w) // 2
-        y_off = (target_height - lb_h) // 2
-
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        dims = (target_width, target_height)
-        writer = cv2.VideoWriter(str(output_path), fourcc, output_fps, dims)
-        if not writer.isOpened():
-            raise RuntimeError("Could not open VideoWriter for output")
-
-        step = max(1, round(native_fps / output_fps))
-        native_index = 0
-
-        _log.info(
-            "Rendering %s → %s (native %.2f fps, step %d, output %.2f fps)",
-            input_video.name,
-            output_path.name,
-            native_fps,
-            step,
-            output_fps,
-        )
-
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            if native_index % step != 0:
-                native_index += 1
-                continue
-
-            video_time_s = native_index / native_fps
-            native_index += 1
-
-            # Letterbox frame to target canvas
-            if src_w != target_width or src_h != target_height:
-                resized = cv2.resize(frame, (lb_w, lb_h), interpolation=cv2.INTER_AREA)
-                canvas = np.zeros((target_height, target_width, 3), dtype=np.uint8)
-                canvas[y_off : y_off + lb_h, x_off : x_off + lb_w] = resized
-                frame = canvas
-
-            # Draw active incidents as banners at the top
-            active = _active_incidents(incidents, video_time_s)
-            banner_y = 0
-            for inc in active:
-                rule = inc.get("rule_id", "?")
-                sev = inc.get("severity", "medium")
-                track = inc.get("canonical_track_id", "").split("/")[-1]
-                t_start = inc.get("first_seen_s", 0)
-                lines = [
-                    f"[!] R{rule[1:]} ALERT  [{track}]  since {t_start:.1f}s  sev={sev}",
-                    inc.get("observation_text", ""),
-                ]
-                banner_y = _draw_banner(frame, lines, alert=True, top=banner_y)
-
-            # Draw track observations
-            obs_list = _nearest_obs(by_time, sorted_times, video_time_s)
-            for obs in obs_list:
-                box = obs.get("box_reference", {})
-                x1 = int(box.get("x1", 0))
-                y1 = int(box.get("y1", 0))
-                x2 = int(box.get("x2", 0))
-                y2 = int(box.get("y2", 0))
-                obj_cls = obs.get("object_class", "person")
-                track_short = obs.get("canonical_track_id", "").split("/")[-1]
-
-                if obj_cls == "person":
-                    hstate = (obs.get("helmet") or {}).get("state", "unknown")
-                    vstate = (obs.get("vest") or {}).get("state", "unknown")
-                    colour = _box_colour(hstate, vstate)
-                    _h = {"helmet": "H:OK", "no_helmet": "H:NO", "unknown": "H:?"}
-                    _v = {"vest": "V:OK", "no_vest": "V:NO", "unknown": "V:?"}
-                    h_abbr = _h.get(hstate, hstate)
-                    v_abbr = _v.get(vstate, vstate)
-                    label = f"{track_short} {h_abbr} {v_abbr}"
-                else:
-                    colour = _C_VEHICLE
-                    label = track_short or obj_cls
-
-                _draw_box(frame, x1, y1, x2, y2, colour, label)
-
-            # Rule status panel and watermark
-            _draw_status_panel(frame, coverage)
-            _draw_watermark(frame)
-
-            # Timestamp
-            _put_text_with_bg(
-                frame,
-                f"{video_time_s:.1f}s",
-                target_width - 60,
-                18,
-                scale=0.45,
-                bg=_C_BANNER_BG,
-            )
-
-            writer.write(frame)
-
-        writer.release()
-
-    finally:
-        cap.release()
-
-    _reencode_h264(output_path, crf=23)
-    _log.info("Rendered annotated video → %s", output_path)
 
 
 # ---------------------------------------------------------------------------
