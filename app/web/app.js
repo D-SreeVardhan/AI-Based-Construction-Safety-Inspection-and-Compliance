@@ -33,9 +33,12 @@ const askForm = el("ask-form");
 const questionInput = el("question");
 const askButton = el("ask");
 const answersEl = el("answers");
+const publishButton = el("publish");
+const spaceLink = el("space-link");
 
 let timerId = null;
 let currentRunId = null;
+let publishing = false;
 
 function setStatus(text, state) {
   statusEl.textContent = text;
@@ -66,6 +69,7 @@ function setBusy(busy) {
   runButton.textContent = busy ? "Running" : "Run";
   pathInput.disabled = busy;
   askButton.disabled = busy || !currentRunId;
+  publishButton.disabled = busy || publishing || !currentRunId;
   for (const button of clipsEl.querySelectorAll("button")) {
     button.disabled = busy;
   }
@@ -130,6 +134,42 @@ askForm.addEventListener("submit", (event) => {
   }
   askRun(question);
 });
+
+publishButton.addEventListener("click", () => {
+  if (currentRunId) {
+    publishRun(currentRunId);
+  }
+});
+
+async function publishRun(runId) {
+  publishing = true;
+  publishButton.disabled = true;
+  publishButton.textContent = "Publishing";
+  startTimer();
+  setStatus(`Uploading ${runId} to Supabase. Large twin videos can take a minute.`, "busy");
+  try {
+    const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/publish`, {
+      method: "POST",
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || `Publish failed (${response.status}).`);
+    }
+    if (payload.space_url) {
+      spaceLink.href = payload.space_url;
+      spaceLink.hidden = false;
+    }
+    publishButton.textContent = "Published";
+    setStatus(`Published ${runId}. Refresh runs on the Space to see it.`, "done");
+  } catch (error) {
+    publishButton.textContent = "Publish to Space";
+    publishButton.disabled = false;
+    setStatus(error.message, "bad");
+  } finally {
+    publishing = false;
+    stopTimer();
+  }
+}
 
 function handleBrowserFile(file) {
   if (file.size > MAX_BROWSER_UPLOAD) {
@@ -306,6 +346,9 @@ function showResult(payload) {
   alertCountEl.textContent = `${incidents.length} raised`;
   answersEl.replaceChildren();
   askButton.disabled = false;
+  publishButton.textContent = "Publish to Space";
+  publishButton.disabled = false;
+  spaceLink.hidden = true;
 
   setStatus(`Run ${payload.run_id} ${payload.status}.`, "done");
 }

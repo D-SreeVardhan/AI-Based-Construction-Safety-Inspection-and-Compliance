@@ -448,6 +448,14 @@ figcaption {
   font-size: 0.8rem;
 }
 
+.run-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 1.2rem;
+  margin-top: 1rem;
+}
+
 .report-link {
   color: var(--hazard);
   font-family: var(--mono);

@@ -77,12 +77,17 @@
         <div class="result" id="result" hidden>
           <figure class="screen">
             <video id="preview" controls playsinline></video>
-            <figcaption>Left: source feed. Right: 2.5D twin. Both are placeholders until detection lands. Distances are not metres.</figcaption>
+            <figcaption>Left: annotated source feed. Right: approximate top-down site map. Distances are not metres.</figcaption>
           </figure>
+
+          <div class="run-actions">
+            <a class="report-link" id="report-link" href="#" target="_blank" rel="noreferrer">Open full report</a>
+            <a class="report-link" id="space-link" href="#" target="_blank" rel="noreferrer" hidden>View on Space</a>
+            <button type="button" id="publish" class="btn-ask" disabled>Publish to Space</button>
+          </div>
 
           <div class="subhead">
             <h3>Rule coverage</h3>
-            <a class="report-link" id="report-link" href="#" target="_blank" rel="noreferrer">Open full report</a>
           </div>
           <ul class="coverage" id="coverage"></ul>
 

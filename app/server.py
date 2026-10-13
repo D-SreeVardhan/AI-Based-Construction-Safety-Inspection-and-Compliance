@@ -11,6 +11,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from app.window import VIDEO_SUFFIXES, is_video_path
+from cloud.publish import publish_run
 from jobs.pipeline_job import create_pipeline_job
 from llm.embedding_cache import get_embeddings
 from llm.qa import answer_run_question
@@ -55,12 +56,15 @@ class DeskHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         path = posixpath.normpath(parsed.path)
-        if path.startswith("/api/runs/") and path.endswith("/ask"):
+        if path.startswith("/api/runs/"):
             parts = path.split("/")
-            if len(parts) != 5:
+            if len(parts) != 5 or parts[4] not in ("ask", "publish"):
                 self.send_error(404)
                 return
-            self._ask_and_reply(parts[3])
+            if parts[4] == "ask":
+                self._ask_and_reply(parts[3])
+            else:
+                self._publish_and_reply(parts[3])
             return
         if path != "/api/process":
             self.send_error(404)
@@ -153,6 +157,23 @@ class DeskHandler(BaseHTTPRequestHandler):
             detection_summary=manifest.get("detection_summary") or {},
         )
         self._send_json(200, answer.model_dump(mode="json"))
+
+    def _publish_and_reply(self, run_id: str) -> None:
+        if not _is_safe_run_id(run_id):
+            self.send_error(404)
+            return
+        run_dir = self.output_root / run_id
+        if not (run_dir / "run_manifest.json").is_file():
+            self._send_json(404, {"error": f"No run named {run_id}"})
+            return
+        try:
+            result = publish_run(run_dir)
+        except Exception as exc:  # noqa: BLE001
+            self._send_json(502, {"error": f"Publish failed: {exc}"})
+            return
+        space = os.environ.get("HF_SPACE")
+        result["space_url"] = f"https://huggingface.co/spaces/{space}" if space else None
+        self._send_json(200, result)
 
     def _read_json(self) -> dict[str, object]:
         length = int(self.headers.get("Content-Length", "0"))

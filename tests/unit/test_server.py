@@ -6,6 +6,8 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
 
+import pytest
+
 from app.server import PROJECT_ROOT, DeskHandler, resolve_local_video
 
 
@@ -29,6 +31,7 @@ def test_index_and_process(tmp_path: Path) -> None:
         assert "Construction Safety Twin" in body
         assert "Drop a site video" in body
         assert "Ask this run" in body
+        assert 'id="publish"' in body
         # Workbench order: the intake pane is authored before the output pane.
         assert body.index('id="drop"') < body.index('id="clips"')
         assert body.index('id="clips"') < body.index('id="status"')
@@ -121,6 +124,47 @@ def test_process_local_path(tmp_path: Path) -> None:
         httpd.shutdown()
         httpd.server_close()
         video.unlink(missing_ok=True)
+
+
+def _post(addr: str, path: str) -> tuple[int, dict[str, object]]:
+    conn = HTTPConnection(addr, timeout=10)
+    conn.request("POST", path, body=b"", headers={"Content-Length": "0"})
+    response = conn.getresponse()
+    return response.status, json.loads(response.read().decode("utf-8"))
+
+
+def test_publish_run_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run_dir = tmp_path / "output" / "run-abc123"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run_manifest.json").write_text("{}", encoding="utf-8")
+    published: list[Path] = []
+
+    def fake_publish(path: Path) -> dict[str, object]:
+        published.append(path)
+        return {"run_id": "run-abc123", "incident_count": 2}
+
+    monkeypatch.setattr("app.server.publish_run", fake_publish)
+    monkeypatch.setenv("HF_SPACE", "owner/safety-twin")
+    httpd, addr = _start(tmp_path / "output")
+    try:
+        status, data = _post(addr, "/api/runs/run-abc123/publish")
+        assert status == 200
+        assert published == [run_dir]
+        assert data["space_url"] == "https://huggingface.co/spaces/owner/safety-twin"
+
+        status, data = _post(addr, "/api/runs/run-missing/publish")
+        assert status == 404
+
+        def failing_publish(path: Path) -> dict[str, object]:
+            raise RuntimeError("Supabase POST failed: 413")
+
+        monkeypatch.setattr("app.server.publish_run", failing_publish)
+        status, data = _post(addr, "/api/runs/run-abc123/publish")
+        assert status == 502
+        assert "413" in str(data["error"])
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
 
 
 def test_desk_css_avoids_space_eating_fonts() -> None:

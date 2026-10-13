@@ -82,9 +82,9 @@ class SupabaseClient:
         quoted_path = quote(object_path.lstrip("/"))
         url = (
             f"{self.config.supabase_url}/storage/v1/object/"
-            f"{self.config.supabase_bucket}/{quoted_path}?upsert=true"
+            f"{self.config.supabase_bucket}/{quoted_path}"
         )
-        headers = self._headers(content_type=content_type)
+        headers = {**self._headers(content_type=content_type), "x-upsert": "true"}
         self._request("POST", url, body=local_path.read_bytes(), headers=headers, timeout=600)
         return f"{self.config.supabase_bucket}/{object_path}"
 

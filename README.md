@@ -91,8 +91,9 @@ uv run safety-twin status
 # synthetic fixture pipeline otherwise (force it with --fake)
 uv run safety-twin process path/to/clip.mp4
 
-# Open the local review UI at http://127.0.0.1:8765/
-uv run safety-twin app
+# Open the local review UI at http://127.0.0.1:8765/ (drop a clip, review it,
+# then press "Publish to Space" to upload the run to Supabase)
+uv run --extra vision safety-twin app
 ```
 
 Run output lands in `output/<run_id>/`:
@@ -103,7 +104,7 @@ incidents.json      incident records with timestamps, confidence, track ids
 briefings.json      regulation-grounded briefings with clause citations
 tracks.jsonl        per-frame track observations
 report.html         self-contained HTML report with provenance block
-safety_twin.mp4     placeholder twin video (annotated rendering not implemented yet)
+safety_twin.mp4     side-by-side twin: annotated source + approximate top-down site map
 crops/              person crops sent to Gemini for PPE assessment
 evidence/           per-incident evidence placeholders
 ```
@@ -154,6 +155,9 @@ into the `clause_chunks` table. Required for hybrid dense retrieval to function.
 ```bash
 uv run safety-twin publish output/<run_id>
 ```
+
+or press **Publish to Space** in the local app after a run finishes. Publishing the same
+run again overwrites its media and rows.
 
 **Deploy the Hugging Face Space:**
 
