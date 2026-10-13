@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import html
+
 import gradio as gr
 import spaces
 
@@ -38,6 +40,17 @@ def _signed_media(client: SupabaseClient, stored_path: str | None) -> str | None
     return client.signed_url(object_path)
 
 
+def _video_html(url: str | None) -> str:
+    # gr.Video would download the file into the Space and re-serve it; a plain
+    # <video> streams straight from Supabase storage with HTTP range requests.
+    if not url:
+        return "<p>No twin video for this run.</p>"
+    return (
+        f'<video src="{html.escape(url, quote=True)}" controls preload="metadata" '
+        'playsinline style="width:100%;max-height:80vh;background:#111"></video>'
+    )
+
+
 def list_runs() -> tuple[object, str]:
     try:
         rows = _client().select(
@@ -59,14 +72,14 @@ def list_runs() -> tuple[object, str]:
         return gr.update(choices=[], value=None), f"DB error: {exc}"
 
 
-def load_run(run_id: str | None) -> tuple[str, str, str | None]:
+def load_run(run_id: str | None) -> tuple[str, str, str]:
     if not run_id:
-        return "Pick a run.", "", None
+        return "Pick a run.", "", _video_html(None)
     try:
         client = _client()
         run_rows = client.select("runs", filters={"id": f"eq.{run_id}"}, limit=1)
         if not run_rows:
-            return f"No run named `{run_id}`.", "", None
+            return f"No run named `{run_id}`.", "", _video_html(None)
         run = run_rows[0]
         manifest = run.get("manifest") or {}
         incidents = client.select("incidents", filters={"run_id": f"eq.{run_id}"}, order="id.asc")
@@ -100,10 +113,10 @@ def load_run(run_id: str | None) -> tuple[str, str, str | None]:
         return (
             summary + "\n\n" + "\n\n".join(incident_lines),
             "\n\n".join(briefing_lines),
-            _signed_media(client, run.get("video_path")),
+            _video_html(_signed_media(client, run.get("video_path"))),
         )
     except Exception as exc:  # noqa: BLE001
-        return f"Error: {exc}", "", None
+        return f"Error: {exc}", "", _video_html(None)
 
 
 def ask_run(run_id: str | None, question: str) -> str:
@@ -163,7 +176,7 @@ with gr.Blocks(title="Construction Safety Twin") as demo:
         refresh = gr.Button("Refresh runs", scale=0)
         run_picker = gr.Dropdown(label="Published runs", choices=[], scale=1)
     run_list = gr.Markdown(value="Loading…")
-    twin_video = gr.Video(label="Safety twin", interactive=False)
+    twin_video = gr.HTML(label="Safety twin")
     run_summary = gr.Markdown()
     briefings_box = gr.Markdown(label="Grounded briefings")
     with gr.Row():

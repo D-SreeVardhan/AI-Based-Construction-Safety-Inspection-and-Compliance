@@ -272,8 +272,10 @@ def _reencode_h264(output_path: Path, crf: int) -> None:
     cmd = [
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
         "-i", str(tmp),
-        "-c:v", "libx264", "-crf", str(crf), "-preset", "fast",
+        "-c:v", "libx264", "-crf", str(crf), "-preset", "medium",
         "-pix_fmt", "yuv420p",
+        # moov atom first so browsers can start playback before the full download
+        "-movflags", "+faststart",
         str(output_path),
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
@@ -591,5 +593,5 @@ def render_twin_video(
     finally:
         cap.release()
 
-    _reencode_h264(output_path, crf=22)
+    _reencode_h264(output_path, crf=28)
     _log.info("Rendered twin video → %s", output_path)

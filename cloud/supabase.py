@@ -37,10 +37,11 @@ class SupabaseClient:
         *,
         body: bytes | None = None,
         headers: dict[str, str] | None = None,
+        timeout: float = 30,
     ) -> bytes:
         request = Request(url, data=body, headers=headers or self._headers(), method=method)
         try:
-            with urlopen(request, timeout=30) as response:
+            with urlopen(request, timeout=timeout) as response:
                 return response.read()
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
@@ -84,7 +85,7 @@ class SupabaseClient:
             f"{self.config.supabase_bucket}/{quoted_path}?upsert=true"
         )
         headers = self._headers(content_type=content_type)
-        self._request("POST", url, body=local_path.read_bytes(), headers=headers)
+        self._request("POST", url, body=local_path.read_bytes(), headers=headers, timeout=600)
         return f"{self.config.supabase_bucket}/{object_path}"
 
     def count(self, table: str, *, filters: dict[str, str] | None = None) -> int:

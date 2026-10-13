@@ -1,4 +1,5 @@
 import json
+import shutil
 from pathlib import Path
 
 import cv2
@@ -134,3 +135,6 @@ def test_render_twin_video_outputs_side_by_side_frames(tmp_path: Path) -> None:
     cap.release()
     assert ok
     assert frame.shape[:2] == (360, 640)
+    if shutil.which("ffmpeg"):
+        data = output.read_bytes()
+        assert 0 <= data.find(b"moov") < data.find(b"mdat")
