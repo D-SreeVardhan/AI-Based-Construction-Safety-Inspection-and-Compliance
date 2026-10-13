@@ -1,6 +1,10 @@
-"""Annotated twin video renderer.
+"""Twin video renderers.
 
-Produces a 1920×1080 H.264 MP4 from the source video with per-frame overlays:
+``render_twin_video`` (used by the pipeline) writes a side-by-side MP4: the
+annotated source on the left and an approximate top-down site map on the right.
+``render_annotated_video`` writes the annotated source alone at full width.
+
+Both draw these per-frame overlays on the source:
   - Bounding boxes and track labels coloured by PPE state
   - Incident banners with rule ID and severity
   - Rule status panel in the bottom-left corner
@@ -9,16 +13,19 @@ Produces a 1920×1080 H.264 MP4 from the source video with per-frame overlays:
 Coordinate assumptions
 ----------------------
 Track boxes in ``tracks.jsonl`` are in the same letterbox space as the
-intake frames (target_width × target_height, default 1920×1080).  They are
-drawn directly onto frames that have been letterboxed to the same canvas.
+intake frames (target_width × target_height, default 1920×1080).  The
+full-width renderer draws them directly; the twin's left pane is a smaller
+letterbox of the same source, so boxes are remapped through ``_Letterbox``.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import shutil
 import subprocess
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -124,8 +131,18 @@ def _draw_banner(
     frame[top : top + banner_h, 0:fw] = roi
     for i, line in enumerate(lines):
         y = top + pad + (i + 1) * line_h - 4
-        cv2.putText(frame, line, (10, y), _FONT, 0.55, _C_TEXT, 1, cv2.LINE_AA)
+        text = _fit_text(line, fw - 20, 0.55)
+        cv2.putText(frame, text, (10, y), _FONT, 0.55, _C_TEXT, 1, cv2.LINE_AA)
     return top + banner_h
+
+
+def _fit_text(text: str, max_width: int, scale: float) -> str:
+    """Truncate *text* with '...' so it renders within *max_width* pixels."""
+    if cv2.getTextSize(text, _FONT, scale, 1)[0][0] <= max_width:
+        return text
+    while text and cv2.getTextSize(text + "...", _FONT, scale, 1)[0][0] > max_width:
+        text = text[:-1]
+    return text.rstrip() + "..."
 
 
 def _draw_status_panel(
@@ -153,14 +170,16 @@ def _draw_status_panel(
     cv2.addWeighted(overlay, 0.70, roi, 0.30, 0, roi)
     frame[y0 : y0 + panel_h, 6 : 6 + panel_w] = roi
     for i, line in enumerate(lines):
-        fg = _C_VIOLATION if "✗" in line else (_C_UNKNOWN if "?" in line else _C_OK)
+        fg = _C_VIOLATION if line.startswith("[X]") else (
+            _C_UNKNOWN if line.startswith("[?]") else _C_OK
+        )
         y = y0 + pad + (i + 1) * line_h - 2
         cv2.putText(frame, line, (10, y), _FONT, 0.42, fg, 1, cv2.LINE_AA)
 
 
 def _draw_watermark(frame: np.ndarray) -> None:
     fh, fw = frame.shape[:2]
-    text = "Heuristic triage — not legal advice"
+    text = "Heuristic triage - not legal advice"
     (tw, _), _ = cv2.getTextSize(text, _FONT, 0.40, 1)
     cv2.putText(frame, text, (fw - tw - 8, fh - 6), _FONT, 0.40, _C_WATERMARK, 1, cv2.LINE_AA)
 
@@ -220,6 +239,52 @@ def _active_incidents(
 # Public API
 # ---------------------------------------------------------------------------
 
+def _load_run_artifacts(
+    run_dir: Path,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Return (tracks, incidents, rule_coverage) from a completed run directory."""
+    tracks_path = run_dir / "tracks.jsonl"
+    incidents_path = run_dir / "incidents.json"
+    manifest_path = run_dir / "run_manifest.json"
+
+    if not tracks_path.exists():
+        raise RuntimeError(f"tracks.jsonl not found in {run_dir}")
+
+    tracks = [
+        json.loads(line)
+        for line in tracks_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    incidents: list[dict[str, Any]] = []
+    if incidents_path.exists():
+        incidents = json.loads(incidents_path.read_text(encoding="utf-8")).get("incidents", [])
+    coverage: list[dict[str, Any]] = []
+    if manifest_path.exists():
+        coverage = json.loads(manifest_path.read_text(encoding="utf-8")).get("rule_coverage", [])
+    return tracks, incidents, coverage
+
+
+def _reencode_h264(output_path: Path, crf: int) -> None:
+    """Re-encode the OpenCV mp4v output to H.264; keep the original if ffmpeg fails."""
+    if not shutil.which("ffmpeg"):
+        return
+    tmp = output_path.with_suffix(".tmp.mp4")
+    output_path.rename(tmp)
+    cmd = [
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        "-i", str(tmp),
+        "-c:v", "libx264", "-crf", str(crf), "-preset", "fast",
+        "-pix_fmt", "yuv420p",
+        str(output_path),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    if result.returncode == 0:
+        tmp.unlink(missing_ok=True)
+        return
+    _log.warning("ffmpeg re-encode failed, keeping mp4v output: %s", result.stderr[:300])
+    tmp.replace(output_path)
+
+
 def render_annotated_video(
     *,
     input_video: Path,
@@ -234,25 +299,7 @@ def render_annotated_video(
     Reads ``tracks.jsonl``, ``incidents.json``, and ``run_manifest.json``
     from *run_dir*.  Writes an H.264 MP4 to *output_path*.
     """
-    tracks_path = run_dir / "tracks.jsonl"
-    incidents_path = run_dir / "incidents.json"
-    manifest_path = run_dir / "run_manifest.json"
-
-    if not tracks_path.exists():
-        raise RuntimeError(f"tracks.jsonl not found in {run_dir}")
-
-    tracks: list[dict[str, Any]] = [
-        json.loads(line)
-        for line in tracks_path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
-    incidents: list[dict[str, Any]] = []
-    if incidents_path.exists():
-        incidents = json.loads(incidents_path.read_text(encoding="utf-8")).get("incidents", [])
-    coverage: list[dict[str, Any]] = []
-    if manifest_path.exists():
-        coverage = json.loads(manifest_path.read_text(encoding="utf-8")).get("rule_coverage", [])
-
+    tracks, incidents, coverage = _load_run_artifacts(run_dir)
     by_time = _build_track_index(tracks)
     sorted_times = sorted(by_time)
 
@@ -318,7 +365,7 @@ def render_annotated_video(
                 t_start = inc.get("first_seen_s", 0)
                 lines = [
                     f"[!] R{rule[1:]} ALERT  [{track}]  since {t_start:.1f}s  sev={sev}",
-                    inc.get("observation_text", "")[:90],
+                    inc.get("observation_text", ""),
                 ]
                 banner_y = _draw_banner(frame, lines, alert=True, top=banner_y)
 
@@ -369,27 +416,7 @@ def render_annotated_video(
     finally:
         cap.release()
 
-    # Re-encode with ffmpeg for better H.264 compatibility if available
-    import shutil
-
-    if shutil.which("ffmpeg"):
-        tmp = output_path.with_suffix(".tmp.mp4")
-        output_path.rename(tmp)
-        cmd = [
-            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-            "-i", str(tmp),
-            "-c:v", "libx264", "-crf", "23", "-preset", "fast",
-            "-pix_fmt", "yuv420p",
-            str(output_path),
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-        tmp.unlink(missing_ok=True)
-        if result.returncode != 0:
-            _log.warning("ffmpeg re-encode failed: %s", result.stderr[:300])
-            # restore original
-            output_path.rename(tmp)
-            tmp.rename(output_path)
-
+    _reencode_h264(output_path, crf=23)
     _log.info("Rendered annotated video → %s", output_path)
 
 
@@ -407,82 +434,80 @@ _PERSON_RADIUS = 12
 _ALERT_RING_RADIUS = 24
 
 
+@dataclass(frozen=True)
+class _Letterbox:
+    """Placement of the scaled source frame inside a canvas."""
+
+    scale: float
+    x_off: int
+    y_off: int
+    w: int
+    h: int
+
+    @classmethod
+    def fit(cls, src_w: int, src_h: int, canvas_w: int, canvas_h: int) -> _Letterbox:
+        scale = min(canvas_w / src_w, canvas_h / src_h)
+        w = round(src_w * scale)
+        h = round(src_h * scale)
+        return cls(scale, (canvas_w - w) // 2, (canvas_h - h) // 2, w, h)
+
+    def normalise(self, x: float, y: float) -> tuple[float, float]:
+        """Canvas pixel → (0..1, 0..1) position within the source image."""
+        return (x - self.x_off) / self.w, (y - self.y_off) / self.h
+
+    def to_other(self, other: _Letterbox, x: float, y: float) -> tuple[int, int]:
+        """Map a point in this canvas to the same source point in *other*."""
+        nx, ny = self.normalise(x, y)
+        return int(other.x_off + nx * other.w), int(other.y_off + ny * other.h)
+
+
 def _to_map_coords(
-    x_lb: float,
-    y_lb: float,
+    x: float,
+    y: float,
     *,
-    x_off: int,
-    lb_w: int,
-    lb_h: int,
+    lb: _Letterbox,
     map_w: int,
     map_h: int,
 ) -> tuple[int, int]:
-    """Project a letterbox-space point onto the top-down perspective map.
+    """Project a detector-canvas point onto the top-down perspective map.
 
-    The mapping is a trapezoid perspective approximation:
-    - far (y_lb=0)  → top of map, horizontally compressed
-    - near (y_lb=lb_h) → bottom of map, horizontally stretched to full width
+    Trapezoid approximation: the top of the source frame (far) is compressed
+    horizontally toward the vanishing point, the bottom (near) spans the map.
     """
-    x_norm = (x_lb - x_off) / lb_w
-    x_norm = max(-0.1, min(1.1, x_norm))   # allow slight bleed for vehicles
-    t = max(0.0, min(1.0, y_lb / lb_h))    # 0=far, 1=near
+    x_norm, y_norm = lb.normalise(x, y)
+    x_norm = max(-0.1, min(1.1, x_norm))
+    t = max(0.0, min(1.0, y_norm))
 
     frac = _MAP_FAR_MARGIN * (1 - t) + _MAP_NEAR_MARGIN * t
     left_edge = frac * map_w
     right_edge = (1.0 - frac) * map_w
-
-    map_x = int(left_edge + x_norm * (right_edge - left_edge))
-    map_y = int(t * map_h)
-    return map_x, map_y
+    return int(left_edge + x_norm * (right_edge - left_edge)), int(t * map_h)
 
 
-def _draw_perspective_grid(
-    canvas: np.ndarray,
-    *,
-    x_off: int,
-    lb_w: int,
-    lb_h: int,
-    map_w: int,
-    map_h: int,
-) -> None:
+def _draw_perspective_grid(canvas: np.ndarray) -> None:
     """Draw a subtle perspective grid on the map canvas."""
-    vp_x = int(map_w * _MAP_VANISH_FRAC)
+    map_h, map_w = canvas.shape[:2]
+    unit = _Letterbox(1.0, 0, 0, 1, 1)
 
-    # Horizontal depth lines (5 zones)
-    for frac in (0.2, 0.4, 0.6, 0.8):
-        y_lb = frac * lb_h
-        left, _ = _to_map_coords(x_off, y_lb, x_off=x_off, lb_w=lb_w, lb_h=lb_h,
-                                  map_w=map_w, map_h=map_h)
-        right, y_map = _to_map_coords(x_off + lb_w, y_lb, x_off=x_off, lb_w=lb_w,
-                                       lb_h=lb_h, map_w=map_w, map_h=map_h)
+    def project(nx: float, ny: float) -> tuple[int, int]:
+        return _to_map_coords(nx, ny, lb=unit, map_w=map_w, map_h=map_h)
+
+    for depth in (0.2, 0.4, 0.6, 0.8):
+        left, y_map = project(0.0, depth)
+        right, _ = project(1.0, depth)
         cv2.line(canvas, (left, y_map), (right, y_map), _MAP_GRID, 1, cv2.LINE_AA)
-        lbl = f"{'FAR' if frac < 0.3 else ''}"
-        if lbl:
-            cv2.putText(canvas, lbl, (left + 4, y_map - 4), _FONT, 0.35, _MAP_GRID, 1)
 
-    # Vertical vanishing lines (4 lines)
-    for x_norm in (0.2, 0.4, 0.6, 0.8):
-        x_lb = x_off + x_norm * lb_w
-        near_x, near_y = _to_map_coords(x_lb, lb_h, x_off=x_off, lb_w=lb_w,
-                                         lb_h=lb_h, map_w=map_w, map_h=map_h)
-        cv2.line(canvas, (vp_x, 0), (near_x, near_y), _MAP_GRID, 1, cv2.LINE_AA)
+    vp_x = int(map_w * _MAP_VANISH_FRAC)
+    for nx in (0.2, 0.4, 0.6, 0.8):
+        cv2.line(canvas, (vp_x, 0), project(nx, 1.0), _MAP_GRID, 1, cv2.LINE_AA)
 
-    # Border of scene content at near edge
-    far_l, _ = _to_map_coords(x_off, 0, x_off=x_off, lb_w=lb_w, lb_h=lb_h,
-                                map_w=map_w, map_h=map_h)
-    far_r, _ = _to_map_coords(x_off + lb_w, 0, x_off=x_off, lb_w=lb_w, lb_h=lb_h,
-                                map_w=map_w, map_h=map_h)
-    near_l, near_y = _to_map_coords(x_off, lb_h, x_off=x_off, lb_w=lb_w, lb_h=lb_h,
-                                     map_w=map_w, map_h=map_h)
-    near_r, _ = _to_map_coords(x_off + lb_w, lb_h, x_off=x_off, lb_w=lb_w,
-                                lb_h=lb_h, map_w=map_w, map_h=map_h)
-    pts = np.array([[far_l, 0], [far_r, 0], [near_r, near_y], [near_l, near_y]])
+    pts = np.array([project(0, 0), project(1, 0), project(1, 1), project(0, 1)])
     cv2.polylines(canvas, [pts], True, (70, 70, 70), 1, cv2.LINE_AA)
 
-    # Labels
+    near_r, near_y = project(1.0, 1.0)
     cv2.putText(canvas, "SITE MAP (approx.)", (8, 18), _FONT, 0.45, _MAP_GRID, 1, cv2.LINE_AA)
     cv2.putText(canvas, "FAR", (vp_x - 12, 12), _FONT, 0.38, _MAP_GRID, 1)
-    cv2.putText(canvas, "NEAR", (near_l, near_y - 6), _FONT, 0.38, _MAP_GRID, 1)
+    cv2.putText(canvas, "NEAR", (near_r - 44, near_y - 6), _FONT, 0.38, _MAP_GRID, 1)
 
 
 def _render_map_pane(
@@ -490,17 +515,17 @@ def _render_map_pane(
     active_incidents: list[dict[str, Any]],
     frame_idx: int,
     *,
-    x_off: int,
-    lb_w: int,
-    lb_h: int,
+    lb: _Letterbox,
     map_w: int,
     map_h: int,
     coverage: list[dict[str, Any]],
 ) -> np.ndarray:
-    """Render one top-down map frame."""
+    """Render one top-down map frame. Observation coords are in *lb*'s canvas."""
     canvas = np.full((map_h, map_w, 3), _MAP_BG, dtype=np.uint8)
-    _draw_perspective_grid(canvas, x_off=x_off, lb_w=lb_w, lb_h=lb_h,
-                           map_w=map_w, map_h=map_h)
+    _draw_perspective_grid(canvas)
+
+    def project(x: float, y: float) -> tuple[int, int]:
+        return _to_map_coords(x, y, lb=lb, map_w=map_w, map_h=map_h)
 
     # Active incident track IDs (for alert rings)
     alert_tracks = {inc.get("canonical_track_id", "") for inc in active_incidents}
@@ -514,8 +539,7 @@ def _render_map_pane(
         track_id = obs.get("canonical_track_id", "")
         track_short = track_id.split("/")[-1]
 
-        mx, my = _to_map_coords(ax, ay, x_off=x_off, lb_w=lb_w, lb_h=lb_h,
-                                map_w=map_w, map_h=map_h)
+        mx, my = project(ax, ay)
 
         if obj_cls == "person":
             hstate = (obs.get("helmet") or {}).get("state", "unknown")
@@ -538,40 +562,29 @@ def _render_map_pane(
             box = obs.get("box_reference", {})
             bx1, by1 = box.get("x1", ax - 50), box.get("y1", ay - 50)
             bx2, by2 = box.get("x2", ax + 50), box.get("y2", ay + 50)
-            # project two anchor rows (top & bottom of box) at centre x
-            cx = (bx1 + bx2) / 2
-            p_tl = _to_map_coords(bx1, by1, x_off=x_off, lb_w=lb_w, lb_h=lb_h,
-                                   map_w=map_w, map_h=map_h)
-            p_tr = _to_map_coords(bx2, by1, x_off=x_off, lb_w=lb_w, lb_h=lb_h,
-                                   map_w=map_w, map_h=map_h)
-            p_br = _to_map_coords(bx2, by2, x_off=x_off, lb_w=lb_w, lb_h=lb_h,
-                                   map_w=map_w, map_h=map_h)
-            p_bl = _to_map_coords(bx1, by2, x_off=x_off, lb_w=lb_w, lb_h=lb_h,
-                                   map_w=map_w, map_h=map_h)
-            pts = np.array([p_tl, p_tr, p_br, p_bl], dtype=np.int32)
-            cv2.fillPoly(canvas, [pts], (40, 60, 70))     # dark fill
+            pts = np.array(
+                [project(bx1, by1), project(bx2, by1), project(bx2, by2), project(bx1, by2)],
+                dtype=np.int32,
+            )
+            cv2.fillPoly(canvas, [pts], (40, 60, 70))
             cv2.polylines(canvas, [pts], True, _C_VEHICLE, 2, cv2.LINE_AA)
-            label_x, label_y = _to_map_coords(cx, (by1 + by2) / 2,
-                                               x_off=x_off, lb_w=lb_w, lb_h=lb_h,
-                                               map_w=map_w, map_h=map_h)
+            label_x, label_y = project((bx1 + bx2) / 2, (by1 + by2) / 2)
             _put_text_with_bg(canvas, track_short, label_x, label_y, scale=0.36,
                               fg=_C_VEHICLE)
 
-    # Active incident banners on map (compact)
     if active_incidents:
         banner_text = f"[!] {len(active_incidents)} ALERT(S) ACTIVE"
-        _put_text_with_bg(canvas, banner_text, 8, map_h - 60, scale=0.50,
+        _put_text_with_bg(canvas, banner_text, 8, 44, scale=0.50,
                           fg=_C_VIOLATION, bg=_C_BANNER_BG, alpha=0.85)
 
-    # Legend
-    legend_y = map_h - 34
+    legend_x = map_w - 96
+    legend_y = 16
     for colour, label in [(_C_VIOLATION, "Violation"), (_C_OK, "PPE OK"),
                            (_C_UNKNOWN, "Unknown"), (_C_VEHICLE, "Vehicle")]:
-        cv2.circle(canvas, (12, legend_y), 6, colour, -1, cv2.LINE_AA)
-        cv2.putText(canvas, label, (22, legend_y + 4), _FONT, 0.33, _MAP_GRID, 1)
-        legend_y += 16
+        cv2.circle(canvas, (legend_x, legend_y), 6, colour, -1, cv2.LINE_AA)
+        cv2.putText(canvas, label, (legend_x + 12, legend_y + 4), _FONT, 0.38, _C_TEXT, 1)
+        legend_y += 18
 
-    # Rule status (compact, right side)
     _draw_status_panel(canvas, coverage)
 
     return canvas
@@ -597,25 +610,7 @@ def render_twin_video(
     Right pane (960×1080): approximate top-down perspective site map with
     worker dots coloured by PPE state, vehicle footprints, and alert rings.
     """
-    tracks_path = run_dir / "tracks.jsonl"
-    incidents_path = run_dir / "incidents.json"
-    manifest_path = run_dir / "run_manifest.json"
-
-    if not tracks_path.exists():
-        raise RuntimeError(f"tracks.jsonl not found in {run_dir}")
-
-    tracks: list[dict[str, Any]] = [
-        json.loads(line)
-        for line in tracks_path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
-    incidents: list[dict[str, Any]] = []
-    if incidents_path.exists():
-        incidents = json.loads(incidents_path.read_text(encoding="utf-8")).get("incidents", [])
-    coverage: list[dict[str, Any]] = []
-    if manifest_path.exists():
-        coverage = json.loads(manifest_path.read_text(encoding="utf-8")).get("rule_coverage", [])
-
+    tracks, incidents, coverage = _load_run_artifacts(run_dir)
     by_time = _build_track_index(tracks)
     sorted_times = sorted(by_time)
 
@@ -631,20 +626,10 @@ def render_twin_video(
         pane_w = target_width // 2   # 960
         pane_h = target_height       # 1080
 
-        # LEFT PANE letterbox geometry (960×1080)
-        scale_l = min(pane_w / src_w, pane_h / src_h)
-        lb_w_l = round(src_w * scale_l)
-        lb_h_l = round(src_h * scale_l)
-        x_off_l = (pane_w - lb_w_l) // 2
-        y_off_l = (pane_h - lb_h_l) // 2
-
-        # ORIGINAL letterbox geometry used by the detector (target_width × target_height)
-        scale_o = min(target_width / src_w, target_height / src_h)
-        lb_w_o = round(src_w * scale_o)
-        lb_h_o = round(src_h * scale_o)
-        x_off_o = (target_width - lb_w_o) // 2   # box coords stored in this space
-        # x-shift to transform stored box x → left-pane x
-        x_shift = x_off_l - x_off_o              # typically negative (656→176 = -480)
+        # Track boxes are stored in the detector canvas (full target size); the
+        # left pane shows the same source letterboxed into half the width.
+        detector_lb = _Letterbox.fit(src_w, src_h, target_width, target_height)
+        pane_lb = _Letterbox.fit(src_w, src_h, pane_w, pane_h)
 
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         writer = cv2.VideoWriter(
@@ -674,12 +659,10 @@ def render_twin_video(
             native_index += 1
 
             # ── LEFT PANE: annotated source ──────────────────────────────
-            if src_w != pane_w or src_h != pane_h:
-                resized_l = cv2.resize(frame, (lb_w_l, lb_h_l), interpolation=cv2.INTER_AREA)
-                left = np.zeros((pane_h, pane_w, 3), dtype=np.uint8)
-                left[y_off_l : y_off_l + lb_h_l, x_off_l : x_off_l + lb_w_l] = resized_l
-            else:
-                left = frame.copy()
+            resized_l = cv2.resize(frame, (pane_lb.w, pane_lb.h), interpolation=cv2.INTER_AREA)
+            left = np.zeros((pane_h, pane_w, 3), dtype=np.uint8)
+            left[pane_lb.y_off : pane_lb.y_off + pane_lb.h,
+                 pane_lb.x_off : pane_lb.x_off + pane_lb.w] = resized_l
 
             obs_list = _nearest_obs(by_time, sorted_times, video_time_s)
             active = _active_incidents(incidents, video_time_s)
@@ -693,17 +676,14 @@ def render_twin_video(
                 t_start = inc.get("first_seen_s", 0)
                 lines = [
                     f"[!] R{rule[1:]} ALERT  [{track}]  since {t_start:.1f}s  sev={sev}",
-                    inc.get("observation_text", "")[:80],
+                    inc.get("observation_text", ""),
                 ]
                 banner_y = _draw_banner(left, lines, alert=True, top=banner_y)
 
-            # Draw track boxes on left pane (with x-shift for half-width)
             for obs in obs_list:
                 box = obs.get("box_reference", {})
-                x1 = int(box.get("x1", 0)) + x_shift
-                y1 = int(box.get("y1", 0))
-                x2 = int(box.get("x2", 0)) + x_shift
-                y2 = int(box.get("y2", 0))
+                x1, y1 = detector_lb.to_other(pane_lb, box.get("x1", 0), box.get("y1", 0))
+                x2, y2 = detector_lb.to_other(pane_lb, box.get("x2", 0), box.get("y2", 0))
                 obj_cls = obs.get("object_class", "person")
                 track_short = obs.get("canonical_track_id", "").split("/")[-1]
 
@@ -732,9 +712,7 @@ def render_twin_video(
                 obs_list,
                 active,
                 frame_idx,
-                x_off=x_off_o,
-                lb_w=lb_w_o,
-                lb_h=lb_h_o,
+                lb=detector_lb,
                 map_w=pane_w,
                 map_h=pane_h,
                 coverage=coverage,
@@ -749,22 +727,5 @@ def render_twin_video(
     finally:
         cap.release()
 
-    # Re-encode with ffmpeg for broad compatibility
-    import shutil as _shutil
-
-    if _shutil.which("ffmpeg"):
-        tmp = output_path.with_suffix(".tmp.mp4")
-        output_path.rename(tmp)
-        cmd = [
-            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-            "-i", str(tmp),
-            "-c:v", "libx264", "-crf", "22", "-preset", "fast",
-            "-pix_fmt", "yuv420p",
-            str(output_path),
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-        tmp.unlink(missing_ok=True)
-        if result.returncode != 0:
-            _log.warning("ffmpeg re-encode failed: %s", result.stderr[:300])
-
+    _reencode_h264(output_path, crf=22)
     _log.info("Rendered twin video → %s", output_path)

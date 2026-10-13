@@ -120,7 +120,6 @@ name = "construction-safety-twin"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "huggingface-hub" },
     { name = "opencv-python" },
     { name = "pydantic" },
     { name = "pyyaml" },
@@ -140,6 +139,7 @@ vision = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "huggingface-hub" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "ruff" },
@@ -148,7 +148,6 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "huggingface-hub", specifier = ">=2.2.0" },
     { name = "lap", marker = "extra == 'vision'", specifier = ">=0.5.12" },
     { name = "opencv-python", specifier = ">=4.10,<5" },
     { name = "pandas", marker = "extra == 'report'", specifier = ">=2.2,<3" },
@@ -163,6 +162,7 @@ provides-extras = ["report", "vision"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "huggingface-hub", specifier = ">=2.2.0" },
     { name = "pytest", specifier = ">=8.4,<9" },
     { name = "pytest-cov", specifier = ">=7,<8" },
     { name = "ruff", specifier = "==0.14.4" },
