@@ -38,10 +38,17 @@ def test_fingerprint_samples_large_files(tmp_path: Path) -> None:
     assert again == digest
 
 
+@pytest.fixture(autouse=True)
+def _gemini_only_ppe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep trained weights on disk out of unit tests; hybrid tests patch their own stage."""
+    monkeypatch.setattr("jobs.pipeline_job.load_ppe_stage", lambda _config: None)
+
+
 class _OneWorkerDetector:
     """Stage-1 stub: one person track observed for 2 s with a single PPE crop at t=0."""
 
     crop_height = 240
+    helmet_state = HelmetState.UNKNOWN
 
     def __init__(self, *_args, **_kwargs) -> None:
         pass
@@ -58,7 +65,7 @@ class _OneWorkerDetector:
                 object_class="person",
                 box_reference=box,
                 anchor_reference=Point2(x=40.0, y=160.0, space=CoordinateSpace.REFERENCE),
-                helmet=HelmetRecord(state=HelmetState.UNKNOWN, confidence=0.0, visible=True),
+                helmet=HelmetRecord(state=self.helmet_state, confidence=0.9, visible=True),
                 vest=VestRecord(state=VestState.UNKNOWN, confidence=0.0, visible=True),
             )
             for frame in range(0, 30, 3)
@@ -179,7 +186,7 @@ def test_real_pipeline_skips_gemini_for_crops_below_min_height(
             pass
 
         def assess(self, _crop) -> AdjudicationResult:
-            raise AssertionError("crops below minimum_person_height_px must not reach Gemini")
+            raise AssertionError("crops below gemini_minimum_crop_height_px must not reach Gemini")
 
     monkeypatch.setattr("jobs.pipeline_job.Stage1Detector", TinyWorkerDetector)
     monkeypatch.setattr("jobs.pipeline_job.GeminiPPEAdjudicator", ExplodingAdjudicator)
@@ -191,6 +198,159 @@ def test_real_pipeline_skips_gemini_for_crops_below_min_height(
     assert any("1 of 1 person crops were shorter than 160 px" in w for w in manifest.warnings)
     assert all(t["helmet"]["state"] == "unknown" for t in _tracks(job))
     assert (job.run_dir / "crops" / "shot-0-person-1-f0.jpg").exists()
+
+
+class _FlaggedWorkerDetector(_OneWorkerDetector):
+    helmet_state = HelmetState.NO_HELMET
+
+
+class _StubStage:
+    model_id = "effnet-b0-two-head:test"
+
+
+def _gemini_says(helmet: HelmetState) -> type:
+    class FixedAdjudicator:
+        calls = 0
+
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def assess(self, _crop) -> AdjudicationResult:
+            FixedAdjudicator.calls += 1
+            return AdjudicationResult(
+                helmet=HelmetRecord(state=helmet, confidence=0.9, visible=True),
+                vest=VestRecord(state=VestState.UNKNOWN, confidence=0.0, visible=True),
+                raw_json="{}",
+                latency_ms=1,
+                cached=False,
+            )
+
+    return FixedAdjudicator
+
+
+def _hybrid(monkeypatch: pytest.MonkeyPatch, detector: type, adjudicator: type) -> None:
+    monkeypatch.setattr("jobs.pipeline_job.load_ppe_stage", lambda _config: _StubStage())
+    monkeypatch.setattr("jobs.pipeline_job.Stage1Detector", detector)
+    monkeypatch.setattr("jobs.pipeline_job.GeminiPPEAdjudicator", adjudicator)
+
+
+def _verifications(job: RealPipelineJob) -> list[dict]:
+    payload = json.loads((job.run_dir / "ppe_verification.json").read_text(encoding="utf-8"))
+    return payload["verifications"]
+
+
+def _helmet_by_window(job: RealPipelineJob) -> tuple[set[str], set[str]]:
+    """Helmet states inside / outside the +-1.5 s window around the t=0 crop."""
+    tracks = _tracks(job)
+    inside = {t["helmet"]["state"] for t in tracks if t["video_time_s"] <= 1.5}
+    outside = {t["helmet"]["state"] for t in tracks if t["video_time_s"] > 1.5}
+    return inside, outside
+
+
+def test_hybrid_gemini_overrides_classifier_flag_near_the_crop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adjudicator = _gemini_says(HelmetState.HELMET)
+    _hybrid(monkeypatch, _FlaggedWorkerDetector, adjudicator)
+
+    job = _run_real(tmp_path, "run-veto", gemini_api_key="test-key")
+    manifest = job.run()
+
+    assert adjudicator.calls == 1
+    assert _helmet_by_window(job) == ({"helmet"}, {"no_helmet"})
+    entry = _verifications(job)[0]
+    assert entry["action"] == "override:helmet"
+    assert entry["classifier"]["helmet"] == "no_helmet"
+    assert manifest.model_ids["ppe"].startswith("effnet-b0-two-head:test+gemini-review/")
+    assert manifest.output_artifacts["ppe_verification"] == "ppe_verification.json"
+    assert any("changed the classifier verdict on 1" in w for w in manifest.warnings)
+
+
+def test_hybrid_gemini_catches_violation_the_classifier_missed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class ClearWorkerDetector(_OneWorkerDetector):
+        helmet_state = HelmetState.HELMET
+
+    _hybrid(monkeypatch, ClearWorkerDetector, _gemini_says(HelmetState.NO_HELMET))
+
+    job = _run_real(tmp_path, "run-missed", gemini_api_key="test-key")
+    job.run()
+
+    assert _helmet_by_window(job) == ({"no_helmet"}, {"helmet"})
+    assert _verifications(job)[0]["action"] == "override:helmet"
+
+
+def test_hybrid_gemini_unknown_keeps_classifier_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _hybrid(monkeypatch, _FlaggedWorkerDetector, _gemini_says(HelmetState.UNKNOWN))
+
+    job = _run_real(tmp_path, "run-kept", gemini_api_key="test-key")
+    job.run()
+
+    assert all(t["helmet"]["state"] == "no_helmet" for t in _tracks(job))
+    assert _verifications(job)[0]["action"] == "agree"
+
+
+def test_hybrid_respects_gemini_call_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adjudicator = _gemini_says(HelmetState.HELMET)
+    _hybrid(monkeypatch, _FlaggedWorkerDetector, adjudicator)
+    config = load_config()
+    config = config.model_copy(
+        update={"ppe": config.ppe.model_copy(update={"maximum_gemini_verifications": 0})}
+    )
+    input_path = tmp_path / "input.mp4"
+    input_path.write_bytes(b"not-a-real-video")
+    job = RealPipelineJob(
+        input_path,
+        output_root=tmp_path / "output",
+        config=config,
+        run_id="run-budget",
+        skip_video=True,
+        gemini_api_key="test-key",
+    )
+    manifest = job.run()
+
+    assert adjudicator.calls == 0
+    assert all(t["helmet"]["state"] == "no_helmet" for t in _tracks(job))
+    assert any("exceeded the 0-call Gemini budget" in w for w in manifest.warnings)
+    assert any("verdict is unverified" in w for w in manifest.warnings)
+
+
+def test_hybrid_skips_gemini_for_small_crops_and_keeps_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class TinyFlaggedDetector(_FlaggedWorkerDetector):
+        crop_height = 80
+
+    adjudicator = _gemini_says(HelmetState.HELMET)
+    _hybrid(monkeypatch, TinyFlaggedDetector, adjudicator)
+
+    job = _run_real(tmp_path, "run-small", gemini_api_key="test-key")
+    manifest = job.run()
+
+    assert adjudicator.calls == 0
+    assert all(t["helmet"]["state"] == "no_helmet" for t in _tracks(job))
+    assert _verifications(job) == []
+    assert any("verdict is unverified" in w for w in manifest.warnings)
+    assert manifest.gemini_status == "ok"
+
+
+def test_hybrid_without_key_keeps_flags_and_warns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _hybrid(monkeypatch, _FlaggedWorkerDetector, _gemini_says(HelmetState.HELMET))
+
+    job = _run_real(tmp_path, "run-hybrid-no-key", gemini_api_key="")
+    manifest = job.run()
+
+    assert all(t["helmet"]["state"] == "no_helmet" for t in _tracks(job))
+    assert manifest.model_ids["ppe"] == "effnet-b0-two-head:test"
+    assert any("were not double-checked" in w for w in manifest.warnings)
+    assert not any("all PPE assessments returned UNKNOWN" in w for w in manifest.warnings)
 
 
 def test_create_pipeline_job_selects_by_gemini_key(

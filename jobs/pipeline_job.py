@@ -7,8 +7,10 @@ import shutil
 import subprocess
 import uuid
 import warnings
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import cv2
 
@@ -19,7 +21,12 @@ from pipeline.intake import FrameSampler
 from pipeline.render import render_twin_video
 from pipeline.report import build_report_html
 from pipeline.rules.engine import evaluate_fake_rules, evaluate_real_rules
-from pipeline.vision import Stage1Detector
+from pipeline.vision import PersonCrop, Stage1Detector
+
+try:
+    from pipeline.vision.ppe_stage import PPEStage
+except ImportError:  # torch arrives with the vision extra
+    PPEStage = None  # type: ignore[assignment,misc]
 from shared.config import AppConfig, load_config
 from shared.coordinates import Box2, Point2
 from shared.enums import (
@@ -48,6 +55,37 @@ def _gemini_status(*, has_key: bool, failed: int, total: int) -> str:
     if failed == 0:
         return "ok"
     return "failed" if failed >= total else "degraded"
+
+
+@dataclass
+class _PPEOutcome:
+    model_id: str
+    sent: int = 0
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    verifications: list[dict[str, Any]] = field(default_factory=list)
+
+
+def load_ppe_stage(config: AppConfig) -> PPEStage | None:
+    """The trained PPE classifier, or None to fall back to Gemini-only PPE."""
+    if PPEStage is None:
+        return None
+    try:
+        return PPEStage.from_config(config.ppe, config.stage1.device)
+    except (OSError, RuntimeError, KeyError) as exc:
+        warnings.warn(f"PPE classifier failed to load ({exc}); using Gemini-only PPE", stacklevel=2)
+        return None
+
+
+def _crop_name(crop: PersonCrop) -> str:
+    return f"crops/{crop.canonical_track_id.replace('/', '-')}-f{crop.frame_index}.jpg"
+
+
+def _flags(obs: Pass1TrackObservation) -> tuple[bool, bool]:
+    return (
+        obs.helmet is not None and obs.helmet.state == HelmetState.NO_HELMET,
+        obs.vest is not None and obs.vest.state == VestState.NO_VEST,
+    )
 
 
 FULL_HASH_BELOW_BYTES = 64 * 1024 * 1024
@@ -497,26 +535,28 @@ class RealPipelineJob:
                 run_id=self.run_id,
                 skip_video=self.skip_video,
             ).run()
+        ppe_stage = load_ppe_stage(self.config)
         observations, crops = detector.detect_and_track(
             sampler,
             ppe_sample_interval_s=self.ppe_sample_interval_s,
             max_frames=self.max_frames,
+            ppe_stage=ppe_stage,
         )
 
-        # --- Stage 2: Gemini PPE adjudication ---
+        # --- Stage 2: Gemini PPE adjudication (Gemini-only) or verification (hybrid) ---
         job = job.model_copy(
             update={
                 "stage": JobStage.DETECTION,
                 "progress": 0.45,
-                "message": f"Adjudicating {len(crops)} crops via Gemini",
+                "message": "Reviewing large person crops via Gemini"
+                if ppe_stage is not None
+                else f"Adjudicating {len(crops)} crops via Gemini",
             }
         )
         self._write_json(self.run_dir / "job.json", job)
 
-        # Observations are frozen; index by track so adjudicated copies replace originals.
-        obs_by_track: dict[str, list[int]] = {}
-        for index, obs in enumerate(observations):
-            obs_by_track.setdefault(obs.canonical_track_id, []).append(index)
+        for crop in crops:
+            cv2.imwrite(str(self.run_dir / _crop_name(crop)), crop.crop_bgr)
 
         adjudicator = (
             GeminiPPEAdjudicator(
@@ -527,39 +567,14 @@ class RealPipelineJob:
             if self.gemini_api_key
             else None
         )
-
-        min_height = self.config.ppe.minimum_person_height_px
-        adjudication_errors: list[str] = []
-        too_small = 0
-        for crop in crops:
-            # Write crop to disk
-            rel_crop_path = (
-                f"crops/{crop.canonical_track_id.replace('/', '-')}-f{crop.frame_index}.jpg"
+        if ppe_stage is None:
+            ppe = self._adjudicate_all_crops(observations, crops, adjudicator)
+        else:
+            ppe = self._review_with_gemini(observations, crops, adjudicator, ppe_stage.model_id)
+            self._write_json(
+                self.run_dir / "ppe_verification.json",
+                {"schema_version": 1, "verifications": ppe.verifications},
             )
-            abs_crop = self.run_dir / rel_crop_path
-            abs_crop.parent.mkdir(parents=True, exist_ok=True)
-            cv2.imwrite(str(abs_crop), crop.crop_bgr)
-            if adjudicator is None:
-                continue
-            # Below this height a helmet is a handful of pixels; models guess a violation.
-            if crop.crop_bgr.shape[0] < min_height:
-                too_small += 1
-                continue
-            result = adjudicator.assess(crop.crop_bgr)
-            if result.error is not None:
-                adjudication_errors.append(result.error)
-            # Patch matching observations in the same track near this frame
-            for index in obs_by_track.get(crop.canonical_track_id, []):
-                obs = observations[index]
-                if abs(obs.video_time_s - crop.video_time_s) > self.ppe_sample_interval_s / 2:
-                    continue
-                update: dict[str, object] = {}
-                if obs.helmet is not None:
-                    update["helmet"] = result.helmet
-                if obs.vest is not None:
-                    update["vest"] = result.vest
-                if update:
-                    observations[index] = obs.model_copy(update=update)
 
         # Write tracks
         tracks_path = self.run_dir / "tracks.jsonl"
@@ -640,6 +655,8 @@ class RealPipelineJob:
             "tracks": "tracks.jsonl",
             "run_manifest": "run_manifest.json",
         }
+        if ppe_stage is not None:
+            artifacts["ppe_verification"] = "ppe_verification.json"
         out_w = self.config.render.output_width
         out_h = self.config.render.output_height
         if self.skip_video:
@@ -667,23 +684,7 @@ class RealPipelineJob:
         run_warnings: list[str] = []
         if not hash_complete:
             run_warnings.append("Input fingerprint is a head/tail sample, not a full-file SHA-256.")
-        if not self.gemini_api_key:
-            run_warnings.append(
-                "GEMINI_API_KEY not set — all PPE assessments returned UNKNOWN. "
-                "R1/R2 alerts will be empty."
-            )
-        adjudicated = len(crops) - too_small
-        if too_small:
-            run_warnings.append(
-                f"{too_small} of {len(crops)} person crops were shorter than {min_height} px "
-                "and were not sent to Gemini (PPE left UNKNOWN for those frames)."
-            )
-        if adjudication_errors:
-            run_warnings.append(
-                f"Gemini PPE assessment failed for {len(adjudication_errors)} of {adjudicated} "
-                f"crops (left UNKNOWN; R1/R2 may under-report). First error: "
-                f"{adjudication_errors[0][:160]}"
-            )
+        run_warnings.extend(ppe.warnings)
 
         manifest = RunManifest(
             run_id=self.run_id,
@@ -694,7 +695,7 @@ class RealPipelineJob:
             input_video=input_meta,
             model_ids={
                 "stage1": str(self.config.stage1.model_path),
-                "ppe": f"gemini/{self.config.scene.gemini_model}",
+                "ppe": ppe.model_id,
                 "rag": RETRIEVAL_MODE,
                 "briefing": "deterministic-grounded-briefing-v1",
             },
@@ -702,8 +703,8 @@ class RealPipelineJob:
             prompt_versions={"briefing_template": "deterministic-v1", "ppe": "ppe-v1"},
             gemini_status=_gemini_status(
                 has_key=bool(self.gemini_api_key),
-                failed=len(adjudication_errors),
-                total=adjudicated,
+                failed=len(ppe.errors),
+                total=ppe.sent,
             ),
             scene_cache_status="none",
             rule_coverage=coverage,
@@ -732,6 +733,172 @@ class RealPipelineJob:
         self._write_json(self.run_dir / "job.json", job)
         return manifest
 
+    def _adjudicate_all_crops(
+        self,
+        observations: list[Pass1TrackObservation],
+        crops: list[PersonCrop],
+        adjudicator: GeminiPPEAdjudicator | None,
+    ) -> _PPEOutcome:
+        """Gemini-only PPE: every sampled crop is assessed and patched onto nearby frames."""
+        outcome = _PPEOutcome(model_id=f"gemini/{self.config.scene.gemini_model}")
+        if adjudicator is None:
+            outcome.warnings.append(
+                "GEMINI_API_KEY not set — all PPE assessments returned UNKNOWN. "
+                "R1/R2 alerts will be empty."
+            )
+            return outcome
+        # Observations are frozen; index by track so adjudicated copies replace originals.
+        obs_by_track = _index_by_track(observations)
+        min_height = self.config.ppe.gemini_minimum_crop_height_px
+        too_small = 0
+        for crop in crops:
+            if crop.crop_bgr.shape[0] < min_height:
+                too_small += 1
+                continue
+            result = adjudicator.assess(crop.crop_bgr)
+            outcome.sent += 1
+            if result.error is not None:
+                outcome.errors.append(result.error)
+            for index in obs_by_track.get(crop.canonical_track_id, []):
+                obs = observations[index]
+                if abs(obs.video_time_s - crop.video_time_s) > self.ppe_sample_interval_s / 2:
+                    continue
+                update: dict[str, object] = {}
+                if obs.helmet is not None:
+                    update["helmet"] = result.helmet
+                if obs.vest is not None:
+                    update["vest"] = result.vest
+                if update:
+                    observations[index] = obs.model_copy(update=update)
+        if too_small:
+            outcome.warnings.append(
+                f"{too_small} of {len(crops)} person crops were shorter than {min_height} px "
+                "and were not sent to Gemini (PPE left UNKNOWN for those frames)."
+            )
+        if outcome.errors:
+            outcome.warnings.append(
+                f"Gemini PPE assessment failed for {len(outcome.errors)} of {outcome.sent} "
+                f"crops (left UNKNOWN; R1/R2 may under-report). First error: "
+                f"{outcome.errors[0][:160]}"
+            )
+        return outcome
+
+    def _review_with_gemini(
+        self,
+        observations: list[Pass1TrackObservation],
+        crops: list[PersonCrop],
+        adjudicator: GeminiPPEAdjudicator | None,
+        classifier_id: str,
+    ) -> _PPEOutcome:
+        """Hybrid PPE, routed by resolution.
+
+        Crops at least ``gemini_minimum_crop_height_px`` tall go to Gemini (flagged workers
+        first, then the largest, up to the call budget); a definite Gemini answer replaces
+        the classifier verdict on that track's frames within half a sampling interval, in
+        either direction. Everything else keeps the classifier verdict: on small crops
+        Gemini guesses, and on large ones the classifier can be fooled by out-of-domain
+        clothing (striped sweaters read as reflective bands).
+        """
+        model = self.config.scene.gemini_model
+        outcome = _PPEOutcome(
+            model_id=f"{classifier_id}+gemini-review/{model}" if adjudicator else classifier_id
+        )
+        obs_by_track = _index_by_track(observations)
+        flagged = {
+            track_id
+            for track_id, indices in obs_by_track.items()
+            if any(any(_flags(observations[i])) for i in indices)
+        }
+        if adjudicator is None:
+            if flagged:
+                outcome.warnings.append(
+                    f"GEMINI_API_KEY not set — {len(flagged)} worker(s) flagged by the PPE "
+                    "classifier were not double-checked."
+                )
+            return outcome
+
+        min_height = self.config.ppe.gemini_minimum_crop_height_px
+        cap = self.config.ppe.maximum_gemini_verifications
+        large = [c for c in crops if c.crop_bgr.shape[0] >= min_height]
+        large.sort(
+            key=lambda c: (c.canonical_track_id not in flagged, -c.crop_bgr.shape[0], c.frame_index)
+        )
+        reviewed, over_budget = large[:cap], large[cap:]
+        reviewed_tracks = {c.canonical_track_id for c in reviewed}
+        half_window = self.ppe_sample_interval_s / 2
+        overrides = 0
+
+        for crop in sorted(reviewed, key=lambda c: c.frame_index):
+            window = [
+                index
+                for index in obs_by_track.get(crop.canonical_track_id, [])
+                if abs(observations[index].video_time_s - crop.video_time_s) <= half_window
+            ]
+            at_crop = next(
+                (o for o in (observations[i] for i in window) if o.frame_index == crop.frame_index),
+                None,
+            )
+            entry: dict[str, Any] = {
+                "track_id": crop.canonical_track_id,
+                "crop": _crop_name(crop),
+                "classifier": {
+                    "helmet": at_crop.helmet.state.value if at_crop and at_crop.helmet else None,
+                    "vest": at_crop.vest.state.value if at_crop and at_crop.vest else None,
+                },
+            }
+            outcome.verifications.append(entry)
+            result = adjudicator.assess(crop.crop_bgr)
+            outcome.sent += 1
+            if result.error is not None:
+                outcome.errors.append(result.error)
+                entry["action"] = "gemini_error_kept"
+                continue
+            entry["gemini"] = {"helmet": result.helmet.state.value, "vest": result.vest.state.value}
+            changed: set[str] = set()
+            for index in window:
+                obs = observations[index]
+                update: dict[str, object] = {}
+                if (
+                    obs.helmet is not None
+                    and result.helmet.state != HelmetState.UNKNOWN
+                    and obs.helmet.state != result.helmet.state
+                ):
+                    update["helmet"] = result.helmet
+                if (
+                    obs.vest is not None
+                    and result.vest.state != VestState.UNKNOWN
+                    and obs.vest.state != result.vest.state
+                ):
+                    update["vest"] = result.vest
+                if update:
+                    observations[index] = obs.model_copy(update=update)
+                    changed.update(update)
+            entry["action"] = "override:" + ",".join(sorted(changed)) if changed else "agree"
+            overrides += bool(changed)
+
+        unreviewed_flagged = flagged - reviewed_tracks
+        outcome.warnings.append(
+            f"Gemini reviewed {outcome.sent} person crop(s) of at least {min_height} px and "
+            f"changed the classifier verdict on {overrides}; smaller workers use the "
+            "classifier alone."
+        )
+        if unreviewed_flagged:
+            outcome.warnings.append(
+                f"{len(unreviewed_flagged)} worker(s) flagged by the classifier had no crop "
+                "Gemini could review; their verdict is unverified."
+            )
+        if over_budget:
+            outcome.warnings.append(
+                f"{len(over_budget)} large crop(s) exceeded the {cap}-call Gemini budget "
+                "(ppe.maximum_gemini_verifications); classifier verdict kept."
+            )
+        if outcome.errors:
+            outcome.warnings.append(
+                f"Gemini PPE review failed for {len(outcome.errors)} of {outcome.sent} "
+                f"crops (classifier verdict kept). First error: {outcome.errors[0][:160]}"
+            )
+        return outcome
+
     @staticmethod
     def _write_json(path: Path, payload: object) -> None:
         if hasattr(payload, "model_dump"):
@@ -739,6 +906,13 @@ class RealPipelineJob:
         else:
             data = payload
         path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def _index_by_track(observations: list[Pass1TrackObservation]) -> dict[str, list[int]]:
+    by_track: dict[str, list[int]] = {}
+    for index, obs in enumerate(observations):
+        by_track.setdefault(obs.canonical_track_id, []).append(index)
+    return by_track
 
 
 def create_pipeline_job(

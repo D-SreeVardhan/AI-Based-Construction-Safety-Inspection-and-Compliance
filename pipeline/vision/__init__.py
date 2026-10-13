@@ -14,6 +14,7 @@ from shared.schemas.tracks import HelmetRecord, Pass1TrackObservation, VestRecor
 
 if TYPE_CHECKING:
     from pipeline.intake import FrameSampler
+    from pipeline.vision.ppe_stage import PPEStage
 
 try:
     from ultralytics import YOLO as _YOLO
@@ -27,6 +28,10 @@ except ImportError:
 _PERSON_CLS = 0
 _VEHICLE_CLS: frozenset[int] = frozenset({1, 2, 3, 5, 6, 7, 8})
 _MIN_CROP_PX = 40  # minimum bounding-box side length to extract a crop
+_UNKNOWN_PPE = (
+    HelmetRecord(state=HelmetState.UNKNOWN, confidence=0.0, visible=True),
+    VestRecord(state=VestState.UNKNOWN, confidence=0.0, visible=True),
+)
 
 
 @dataclass
@@ -54,10 +59,10 @@ def _extract_crop(frame: np.ndarray, box: Box2) -> np.ndarray | None:
 class Stage1Detector:
     """YOLO11n person + vehicle detector with ByteTrack on MPS/CPU.
 
-    All person track observations are returned with helmet and vest states
-    set to UNKNOWN; the GeminiPPEAdjudicator fills those in during the next pass.
-    One crop per person per *ppe_sample_interval_s* is returned for adjudication
-    to keep Gemini API call counts bounded.
+    With a ``PPEStage``, helmet and vest states come from the two-head classifier and
+    temporal filter; without one they stay UNKNOWN for the Gemini adjudicator to fill in.
+    One crop per person per *ppe_sample_interval_s* is returned either way, for Gemini
+    adjudication or verification, to keep API call counts bounded.
     """
 
     def __init__(
@@ -95,12 +100,13 @@ class Stage1Detector:
         *,
         ppe_sample_interval_s: float = 3.0,
         max_frames: int | None = None,
+        ppe_stage: PPEStage | None = None,
     ) -> tuple[list[Pass1TrackObservation], list[PersonCrop]]:
         """Run detection and ByteTrack over *sampler*.
 
         Returns ``(observations, crops_for_adjudication)``.
-        observations have helmet/vest = UNKNOWN until the adjudicator runs.
-        crops_for_adjudication holds at most one crop per person per
+        Without *ppe_stage*, observations have helmet/vest = UNKNOWN until the adjudicator
+        runs. crops_for_adjudication holds at most one crop per person per
         *ppe_sample_interval_s* to bound Gemini API usage.
         """
         observations: list[Pass1TrackObservation] = []
@@ -127,15 +133,29 @@ class Stage1Detector:
             if boxes is None or boxes.id is None:
                 continue
 
+            detections: list[tuple[int, bool, str, Box2]] = []
             for i in range(len(boxes)):
                 track_id = int(boxes.id[i])
-                cls = int(boxes.cls[i])
-                is_person = cls == _PERSON_CLS
+                is_person = int(boxes.cls[i]) == _PERSON_CLS
                 object_class = "person" if is_person else "vehicle"
-                canonical = f"{self.shot_id}/{object_class}-{track_id}"
                 x1, y1, x2, y2 = (float(v) for v in boxes.xyxy[i].tolist())
                 box = Box2(x1=x1, y1=y1, x2=x2, y2=y2, space=CoordinateSpace.REFERENCE)
-                anchor = Point2(x=(x1 + x2) / 2, y=y2, space=CoordinateSpace.REFERENCE)
+                detections.append(
+                    (track_id, is_person, f"{self.shot_id}/{object_class}-{track_id}", box)
+                )
+            ppe = (
+                ppe_stage.assess(
+                    frame_bgr,
+                    [(canonical, box) for _, is_person, canonical, box in detections if is_person],
+                )
+                if ppe_stage is not None
+                else {}
+            )
+
+            for track_id, is_person, canonical, box in detections:
+                object_class = "person" if is_person else "vehicle"
+                anchor = Point2(x=(box.x1 + box.x2) / 2, y=box.y2, space=CoordinateSpace.REFERENCE)
+                helmet, vest = ppe.get(canonical, _UNKNOWN_PPE) if is_person else (None, None)
 
                 obs = Pass1TrackObservation(
                     shot_id=self.shot_id,
@@ -146,12 +166,8 @@ class Stage1Detector:
                     object_class=object_class,
                     box_reference=box,
                     anchor_reference=anchor,
-                    helmet=HelmetRecord(state=HelmetState.UNKNOWN, confidence=0.0, visible=True)
-                    if is_person
-                    else None,
-                    vest=VestRecord(state=VestState.UNKNOWN, confidence=0.0, visible=True)
-                    if is_person
-                    else None,
+                    helmet=helmet,
+                    vest=vest,
                 )
                 observations.append(obs)
 

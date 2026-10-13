@@ -31,9 +31,20 @@ ppe:
   image_size: 224
   batch_size: 32
   confidence_floor: 0.70
-  minimum_person_height_px: 160
+  # Workers shorter than this are not classified at all.
+  minimum_person_height_px: 40
   temporal_alpha: 0.35
   minimum_observations: 4
+  # Head/torso bands assume an upright worker; a wider box (crouching, bending) is not
+  # assessable on that frame.
+  minimum_upright_aspect: 1.6
+  # The temporal filter carries the state between classified frames.
+  classify_every_frames: 2
+  # Crops at least this tall go to Gemini, whose verdict overrides the classifier there;
+  # below it lite models guess a violation instead of answering unknown.
+  gemini_minimum_crop_height_px: 160
+  # Gemini calls per run (flagged workers first, then the largest crops).
+  maximum_gemini_verifications: 12
 
 pose:
   model_path: artifacts/models/pose/yolo26n-pose.pt

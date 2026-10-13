@@ -46,6 +46,10 @@ class PPEConfig(StrictModel):
     minimum_person_height_px: int
     temporal_alpha: float
     minimum_observations: int
+    minimum_upright_aspect: float
+    classify_every_frames: int = Field(ge=1)
+    gemini_minimum_crop_height_px: int
+    maximum_gemini_verifications: int = Field(ge=0)
 
 
 class PoseConfig(StrictModel):

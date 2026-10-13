@@ -105,16 +105,35 @@ briefings.json      regulation-grounded briefings with clause citations
 tracks.jsonl        per-frame track observations
 report.html         self-contained HTML report with provenance block
 safety_twin.mp4     side-by-side twin: annotated source + approximate top-down site map
-crops/              person crops sent to Gemini for PPE assessment
+crops/              sampled person crops (one per track every 3 s)
+ppe_verification.json  hybrid mode only: per reviewed crop, classifier vs Gemini verdict
 evidence/           per-incident evidence placeholders
 ```
 
-**Gemini model and quota:** PPE adjudication and Q&A both use `scene.gemini_model` in
+**PPE: hybrid classifier + Gemini, routed by resolution.** When
+`artifacts/models/ppe/best.pt` exists, a two-head EfficientNet-B0 classifier (helmet / vest,
+each with an `unknown` class) assesses every upright worker at least
+`ppe.minimum_person_height_px` (40) tall, every `ppe.classify_every_frames` frames, and a
+per-track temporal filter smooths the verdicts. Crops at least
+`ppe.gemini_minimum_crop_height_px` (160) tall also go to Gemini (flagged workers first, at
+most `ppe.maximum_gemini_verifications` calls), and a definite Gemini answer replaces the
+classifier verdict around that frame. Small workers rely on the classifier, where Gemini
+guesses; large ones rely on Gemini, because the classifier is trained on other footage and
+on the yard clip reads a red-and-blue striped sweater as a hi-vis vest. Without the
+weights, or without torch, the pipeline falls back to Gemini-only PPE. Build the weights once from the Ultralytics Construction-PPE dataset in
+`data/external/ultralytics-ppe/`:
+
+```bash
+uv run --extra vision python tools/build_ppe_crops.py data/external/ultralytics-ppe
+uv run --extra vision python tools/train_ppe.py --epochs 40   # ~30 min on Apple MPS
+```
+
+**Gemini model and quota:** PPE verification and Q&A both use `scene.gemini_model` in
 `config/defaults.yaml` (default `gemini-3.5-flash-lite`). Free-tier limits are per project
 and per model; check the current numbers in AI Studio. Person crops shorter than
-`ppe.minimum_person_height_px` (160) are not sent to Gemini, because at that size models
-guess a violation instead of answering `unknown`; on the 30 s yard clip this sends 10 of
-17 crops. When the quota is exhausted the run still completes: R1/R2 report
+`ppe.gemini_minimum_crop_height_px` (160) are not sent to Gemini, because at that size
+models guess a violation instead of answering `unknown`. When the quota is exhausted the
+run still completes: in hybrid mode the classifier verdict is kept; in Gemini-only mode R1/R2 report
 `inconclusive (no_ppe_evidence)`, `gemini_status` is `failed`, and the manifest and report
 carry a warning. Q&A falls back to deterministic answers (trace starts with
 `gemini_qa_failed`) that quote the retrieved BOCW clauses.
