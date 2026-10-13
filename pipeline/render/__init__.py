@@ -391,3 +391,380 @@ def render_annotated_video(
             tmp.rename(output_path)
 
     _log.info("Rendered annotated video → %s", output_path)
+
+
+# ---------------------------------------------------------------------------
+# Top-down 2.5D map helpers
+# ---------------------------------------------------------------------------
+
+# Map-specific colours (BGR)
+_MAP_BG = (28, 28, 28)
+_MAP_GRID = (52, 52, 52)
+_MAP_VANISH_FRAC = 0.50   # vanishing point x as fraction of map width
+_MAP_FAR_MARGIN = 0.26    # horizontal squeeze at far edge (fraction each side)
+_MAP_NEAR_MARGIN = 0.04   # horizontal margin at near edge (fraction each side)
+_PERSON_RADIUS = 12
+_ALERT_RING_RADIUS = 24
+
+
+def _to_map_coords(
+    x_lb: float,
+    y_lb: float,
+    *,
+    x_off: int,
+    lb_w: int,
+    lb_h: int,
+    map_w: int,
+    map_h: int,
+) -> tuple[int, int]:
+    """Project a letterbox-space point onto the top-down perspective map.
+
+    The mapping is a trapezoid perspective approximation:
+    - far (y_lb=0)  → top of map, horizontally compressed
+    - near (y_lb=lb_h) → bottom of map, horizontally stretched to full width
+    """
+    x_norm = (x_lb - x_off) / lb_w
+    x_norm = max(-0.1, min(1.1, x_norm))   # allow slight bleed for vehicles
+    t = max(0.0, min(1.0, y_lb / lb_h))    # 0=far, 1=near
+
+    frac = _MAP_FAR_MARGIN * (1 - t) + _MAP_NEAR_MARGIN * t
+    left_edge = frac * map_w
+    right_edge = (1.0 - frac) * map_w
+
+    map_x = int(left_edge + x_norm * (right_edge - left_edge))
+    map_y = int(t * map_h)
+    return map_x, map_y
+
+
+def _draw_perspective_grid(
+    canvas: np.ndarray,
+    *,
+    x_off: int,
+    lb_w: int,
+    lb_h: int,
+    map_w: int,
+    map_h: int,
+) -> None:
+    """Draw a subtle perspective grid on the map canvas."""
+    vp_x = int(map_w * _MAP_VANISH_FRAC)
+
+    # Horizontal depth lines (5 zones)
+    for frac in (0.2, 0.4, 0.6, 0.8):
+        y_lb = frac * lb_h
+        left, _ = _to_map_coords(x_off, y_lb, x_off=x_off, lb_w=lb_w, lb_h=lb_h,
+                                  map_w=map_w, map_h=map_h)
+        right, y_map = _to_map_coords(x_off + lb_w, y_lb, x_off=x_off, lb_w=lb_w,
+                                       lb_h=lb_h, map_w=map_w, map_h=map_h)
+        cv2.line(canvas, (left, y_map), (right, y_map), _MAP_GRID, 1, cv2.LINE_AA)
+        lbl = f"{'FAR' if frac < 0.3 else ''}"
+        if lbl:
+            cv2.putText(canvas, lbl, (left + 4, y_map - 4), _FONT, 0.35, _MAP_GRID, 1)
+
+    # Vertical vanishing lines (4 lines)
+    for x_norm in (0.2, 0.4, 0.6, 0.8):
+        x_lb = x_off + x_norm * lb_w
+        near_x, near_y = _to_map_coords(x_lb, lb_h, x_off=x_off, lb_w=lb_w,
+                                         lb_h=lb_h, map_w=map_w, map_h=map_h)
+        cv2.line(canvas, (vp_x, 0), (near_x, near_y), _MAP_GRID, 1, cv2.LINE_AA)
+
+    # Border of scene content at near edge
+    far_l, _ = _to_map_coords(x_off, 0, x_off=x_off, lb_w=lb_w, lb_h=lb_h,
+                                map_w=map_w, map_h=map_h)
+    far_r, _ = _to_map_coords(x_off + lb_w, 0, x_off=x_off, lb_w=lb_w, lb_h=lb_h,
+                                map_w=map_w, map_h=map_h)
+    near_l, near_y = _to_map_coords(x_off, lb_h, x_off=x_off, lb_w=lb_w, lb_h=lb_h,
+                                     map_w=map_w, map_h=map_h)
+    near_r, _ = _to_map_coords(x_off + lb_w, lb_h, x_off=x_off, lb_w=lb_w,
+                                lb_h=lb_h, map_w=map_w, map_h=map_h)
+    pts = np.array([[far_l, 0], [far_r, 0], [near_r, near_y], [near_l, near_y]])
+    cv2.polylines(canvas, [pts], True, (70, 70, 70), 1, cv2.LINE_AA)
+
+    # Labels
+    cv2.putText(canvas, "SITE MAP (approx.)", (8, 18), _FONT, 0.45, _MAP_GRID, 1, cv2.LINE_AA)
+    cv2.putText(canvas, "FAR", (vp_x - 12, 12), _FONT, 0.38, _MAP_GRID, 1)
+    cv2.putText(canvas, "NEAR", (near_l, near_y - 6), _FONT, 0.38, _MAP_GRID, 1)
+
+
+def _render_map_pane(
+    obs_list: list[dict[str, Any]],
+    active_incidents: list[dict[str, Any]],
+    frame_idx: int,
+    *,
+    x_off: int,
+    lb_w: int,
+    lb_h: int,
+    map_w: int,
+    map_h: int,
+    coverage: list[dict[str, Any]],
+) -> np.ndarray:
+    """Render one top-down map frame."""
+    canvas = np.full((map_h, map_w, 3), _MAP_BG, dtype=np.uint8)
+    _draw_perspective_grid(canvas, x_off=x_off, lb_w=lb_w, lb_h=lb_h,
+                           map_w=map_w, map_h=map_h)
+
+    # Active incident track IDs (for alert rings)
+    alert_tracks = {inc.get("canonical_track_id", "") for inc in active_incidents}
+    # Flash: toggle every 8 frames
+    flash_on = (frame_idx // 8) % 2 == 0
+
+    for obs in obs_list:
+        anchor = obs.get("anchor_reference", {})
+        ax, ay = anchor.get("x", 0.0), anchor.get("y", 0.0)
+        obj_cls = obs.get("object_class", "person")
+        track_id = obs.get("canonical_track_id", "")
+        track_short = track_id.split("/")[-1]
+
+        mx, my = _to_map_coords(ax, ay, x_off=x_off, lb_w=lb_w, lb_h=lb_h,
+                                map_w=map_w, map_h=map_h)
+
+        if obj_cls == "person":
+            hstate = (obs.get("helmet") or {}).get("state", "unknown")
+            vstate = (obs.get("vest") or {}).get("state", "unknown")
+            colour = _box_colour(hstate, vstate)
+
+            # Alert ring (flashing)
+            if track_id in alert_tracks and flash_on:
+                cv2.circle(canvas, (mx, my), _ALERT_RING_RADIUS, _C_VIOLATION, 3, cv2.LINE_AA)
+            elif track_id in alert_tracks:
+                cv2.circle(canvas, (mx, my), _ALERT_RING_RADIUS, _C_BANNER_BG, 3, cv2.LINE_AA)
+
+            # Filled dot with outline
+            cv2.circle(canvas, (mx, my), _PERSON_RADIUS, colour, -1, cv2.LINE_AA)
+            cv2.circle(canvas, (mx, my), _PERSON_RADIUS, _C_TEXT, 1, cv2.LINE_AA)
+            _put_text_with_bg(canvas, track_short, mx + 14, my + 4, scale=0.38, fg=colour)
+
+        else:
+            # Vehicle: project all 4 bounding-box corners
+            box = obs.get("box_reference", {})
+            bx1, by1 = box.get("x1", ax - 50), box.get("y1", ay - 50)
+            bx2, by2 = box.get("x2", ax + 50), box.get("y2", ay + 50)
+            # project two anchor rows (top & bottom of box) at centre x
+            cx = (bx1 + bx2) / 2
+            p_tl = _to_map_coords(bx1, by1, x_off=x_off, lb_w=lb_w, lb_h=lb_h,
+                                   map_w=map_w, map_h=map_h)
+            p_tr = _to_map_coords(bx2, by1, x_off=x_off, lb_w=lb_w, lb_h=lb_h,
+                                   map_w=map_w, map_h=map_h)
+            p_br = _to_map_coords(bx2, by2, x_off=x_off, lb_w=lb_w, lb_h=lb_h,
+                                   map_w=map_w, map_h=map_h)
+            p_bl = _to_map_coords(bx1, by2, x_off=x_off, lb_w=lb_w, lb_h=lb_h,
+                                   map_w=map_w, map_h=map_h)
+            pts = np.array([p_tl, p_tr, p_br, p_bl], dtype=np.int32)
+            cv2.fillPoly(canvas, [pts], (40, 60, 70))     # dark fill
+            cv2.polylines(canvas, [pts], True, _C_VEHICLE, 2, cv2.LINE_AA)
+            label_x, label_y = _to_map_coords(cx, (by1 + by2) / 2,
+                                               x_off=x_off, lb_w=lb_w, lb_h=lb_h,
+                                               map_w=map_w, map_h=map_h)
+            _put_text_with_bg(canvas, track_short, label_x, label_y, scale=0.36,
+                              fg=_C_VEHICLE)
+
+    # Active incident banners on map (compact)
+    if active_incidents:
+        banner_text = f"[!] {len(active_incidents)} ALERT(S) ACTIVE"
+        _put_text_with_bg(canvas, banner_text, 8, map_h - 60, scale=0.50,
+                          fg=_C_VIOLATION, bg=_C_BANNER_BG, alpha=0.85)
+
+    # Legend
+    legend_y = map_h - 34
+    for colour, label in [(_C_VIOLATION, "Violation"), (_C_OK, "PPE OK"),
+                           (_C_UNKNOWN, "Unknown"), (_C_VEHICLE, "Vehicle")]:
+        cv2.circle(canvas, (12, legend_y), 6, colour, -1, cv2.LINE_AA)
+        cv2.putText(canvas, label, (22, legend_y + 4), _FONT, 0.33, _MAP_GRID, 1)
+        legend_y += 16
+
+    # Rule status (compact, right side)
+    _draw_status_panel(canvas, coverage)
+
+    return canvas
+
+
+# ---------------------------------------------------------------------------
+# Public API: side-by-side twin video
+# ---------------------------------------------------------------------------
+
+def render_twin_video(
+    *,
+    input_video: Path,
+    run_dir: Path,
+    output_path: Path,
+    target_width: int = 1920,
+    target_height: int = 1080,
+    output_fps: float = 15.0,
+) -> None:
+    """Render a 1920×1080 side-by-side twin video.
+
+    Left pane (960×1080): annotated source video with bounding boxes,
+    incident banners, rule status, and watermark.
+    Right pane (960×1080): approximate top-down perspective site map with
+    worker dots coloured by PPE state, vehicle footprints, and alert rings.
+    """
+    tracks_path = run_dir / "tracks.jsonl"
+    incidents_path = run_dir / "incidents.json"
+    manifest_path = run_dir / "run_manifest.json"
+
+    if not tracks_path.exists():
+        raise RuntimeError(f"tracks.jsonl not found in {run_dir}")
+
+    tracks: list[dict[str, Any]] = [
+        json.loads(line)
+        for line in tracks_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    incidents: list[dict[str, Any]] = []
+    if incidents_path.exists():
+        incidents = json.loads(incidents_path.read_text(encoding="utf-8")).get("incidents", [])
+    coverage: list[dict[str, Any]] = []
+    if manifest_path.exists():
+        coverage = json.loads(manifest_path.read_text(encoding="utf-8")).get("rule_coverage", [])
+
+    by_time = _build_track_index(tracks)
+    sorted_times = sorted(by_time)
+
+    cap = cv2.VideoCapture(str(input_video))
+    if not cap.isOpened():
+        raise RuntimeError(f"Cannot open source video: {input_video}")
+
+    try:
+        native_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        src_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        src_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        pane_w = target_width // 2   # 960
+        pane_h = target_height       # 1080
+
+        # LEFT PANE letterbox geometry (960×1080)
+        scale_l = min(pane_w / src_w, pane_h / src_h)
+        lb_w_l = round(src_w * scale_l)
+        lb_h_l = round(src_h * scale_l)
+        x_off_l = (pane_w - lb_w_l) // 2
+        y_off_l = (pane_h - lb_h_l) // 2
+
+        # ORIGINAL letterbox geometry used by the detector (target_width × target_height)
+        scale_o = min(target_width / src_w, target_height / src_h)
+        lb_w_o = round(src_w * scale_o)
+        lb_h_o = round(src_h * scale_o)
+        x_off_o = (target_width - lb_w_o) // 2   # box coords stored in this space
+        # x-shift to transform stored box x → left-pane x
+        x_shift = x_off_l - x_off_o              # typically negative (656→176 = -480)
+
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        writer = cv2.VideoWriter(
+            str(output_path), fourcc, output_fps, (target_width, target_height)
+        )
+        if not writer.isOpened():
+            raise RuntimeError("Could not open VideoWriter for twin output")
+
+        step = max(1, round(native_fps / output_fps))
+        native_index = 0
+        frame_idx = 0
+
+        _log.info(
+            "Rendering twin %s → %s (src %.2f fps, step %d, out %.2f fps)",
+            input_video.name, output_path.name, native_fps, step, output_fps,
+        )
+
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            if native_index % step != 0:
+                native_index += 1
+                continue
+
+            video_time_s = native_index / native_fps
+            native_index += 1
+
+            # ── LEFT PANE: annotated source ──────────────────────────────
+            if src_w != pane_w or src_h != pane_h:
+                resized_l = cv2.resize(frame, (lb_w_l, lb_h_l), interpolation=cv2.INTER_AREA)
+                left = np.zeros((pane_h, pane_w, 3), dtype=np.uint8)
+                left[y_off_l : y_off_l + lb_h_l, x_off_l : x_off_l + lb_w_l] = resized_l
+            else:
+                left = frame.copy()
+
+            obs_list = _nearest_obs(by_time, sorted_times, video_time_s)
+            active = _active_incidents(incidents, video_time_s)
+
+            # Draw banners on left pane
+            banner_y = 0
+            for inc in active:
+                rule = inc.get("rule_id", "?")
+                sev = inc.get("severity", "medium")
+                track = inc.get("canonical_track_id", "").split("/")[-1]
+                t_start = inc.get("first_seen_s", 0)
+                lines = [
+                    f"[!] R{rule[1:]} ALERT  [{track}]  since {t_start:.1f}s  sev={sev}",
+                    inc.get("observation_text", "")[:80],
+                ]
+                banner_y = _draw_banner(left, lines, alert=True, top=banner_y)
+
+            # Draw track boxes on left pane (with x-shift for half-width)
+            for obs in obs_list:
+                box = obs.get("box_reference", {})
+                x1 = int(box.get("x1", 0)) + x_shift
+                y1 = int(box.get("y1", 0))
+                x2 = int(box.get("x2", 0)) + x_shift
+                y2 = int(box.get("y2", 0))
+                obj_cls = obs.get("object_class", "person")
+                track_short = obs.get("canonical_track_id", "").split("/")[-1]
+
+                if obj_cls == "person":
+                    hstate = (obs.get("helmet") or {}).get("state", "unknown")
+                    vstate = (obs.get("vest") or {}).get("state", "unknown")
+                    colour = _box_colour(hstate, vstate)
+                    _h = {"helmet": "H:OK", "no_helmet": "H:NO", "unknown": "H:?"}
+                    _v = {"vest": "V:OK", "no_vest": "V:NO", "unknown": "V:?"}
+                    label = f"{track_short} {_h.get(hstate, hstate)} {_v.get(vstate, vstate)}"
+                else:
+                    colour = _C_VEHICLE
+                    label = track_short or obj_cls
+                _draw_box(left, x1, y1, x2, y2, colour, label)
+
+            _draw_status_panel(left, coverage)
+            _draw_watermark(left)
+            _put_text_with_bg(left, f"{video_time_s:.1f}s", pane_w - 54, 18,
+                              scale=0.42, bg=_C_BANNER_BG)
+
+            # Divider line between panes
+            cv2.line(left, (pane_w - 1, 0), (pane_w - 1, pane_h - 1), (60, 60, 60), 2)
+
+            # ── RIGHT PANE: top-down map ─────────────────────────────────
+            right = _render_map_pane(
+                obs_list,
+                active,
+                frame_idx,
+                x_off=x_off_o,
+                lb_w=lb_w_o,
+                lb_h=lb_h_o,
+                map_w=pane_w,
+                map_h=pane_h,
+                coverage=coverage,
+            )
+
+            combined = np.hstack([left, right])
+            writer.write(combined)
+            frame_idx += 1
+
+        writer.release()
+
+    finally:
+        cap.release()
+
+    # Re-encode with ffmpeg for broad compatibility
+    import shutil as _shutil
+
+    if _shutil.which("ffmpeg"):
+        tmp = output_path.with_suffix(".tmp.mp4")
+        output_path.rename(tmp)
+        cmd = [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-i", str(tmp),
+            "-c:v", "libx264", "-crf", "22", "-preset", "fast",
+            "-pix_fmt", "yuv420p",
+            str(output_path),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        tmp.unlink(missing_ok=True)
+        if result.returncode != 0:
+            _log.warning("ffmpeg re-encode failed: %s", result.stderr[:300])
+
+    _log.info("Rendered twin video → %s", output_path)

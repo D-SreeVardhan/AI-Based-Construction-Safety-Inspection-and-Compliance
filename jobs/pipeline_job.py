@@ -16,7 +16,7 @@ from llm.adjudicator import GeminiPPEAdjudicator
 from llm.regulations import CATALOGUE_SHA256
 from llm.retrieval import RETRIEVAL_MODE, build_grounded_briefing
 from pipeline.intake import FrameSampler
-from pipeline.render import render_annotated_video
+from pipeline.render import render_twin_video
 from pipeline.report import build_report_html
 from pipeline.rules.engine import evaluate_fake_rules, evaluate_real_rules
 from pipeline.vision import Stage1Detector
@@ -646,7 +646,7 @@ class RealPipelineJob:
             video_path.write_bytes(b"")
             artifacts["safety_twin"] = "safety_twin.mp4"
         else:
-            render_annotated_video(
+            render_twin_video(
                 input_video=self.input_path,
                 run_dir=self.run_dir,
                 output_path=video_path,
