@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 import cv2
@@ -30,6 +30,41 @@ class FrameSampler:
     @property
     def effective_fps(self) -> float:
         return self.target_fps
+
+    def sample_count(self) -> int:
+        """Number of samples the iterator yields (from container metadata)."""
+        cap = cv2.VideoCapture(str(self.video_path))
+        if not cap.isOpened():
+            raise RuntimeError(f"Cannot open video: {self.video_path}")
+        try:
+            native_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+            step = max(1, round(native_fps / self.target_fps))
+            return -(-int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) // step)
+        finally:
+            cap.release()
+
+    def frames_at(self, sample_indices: Sequence[int]) -> dict[int, tuple[float, np.ndarray]]:
+        """Letterboxed frames for specific sample indices, by seeking instead of a full decode.
+
+        Returns ``{sample_index: (video_time_s, frame_bgr)}``; indices that cannot be read
+        are omitted.
+        """
+        cap = cv2.VideoCapture(str(self.video_path))
+        if not cap.isOpened():
+            raise RuntimeError(f"Cannot open video: {self.video_path}")
+        try:
+            native_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+            step = max(1, round(native_fps / self.target_fps))
+            frames: dict[int, tuple[float, np.ndarray]] = {}
+            for sample_index in sorted(set(sample_indices)):
+                native_index = sample_index * step
+                cap.set(cv2.CAP_PROP_POS_FRAMES, native_index)
+                ok, frame = cap.read()
+                if ok:
+                    frames[sample_index] = (native_index / native_fps, self._letterbox(frame))
+            return frames
+        finally:
+            cap.release()
 
     def __iter__(self) -> Iterator[tuple[int, float, np.ndarray]]:
         cap = cv2.VideoCapture(str(self.video_path))

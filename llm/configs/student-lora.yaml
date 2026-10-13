@@ -1,0 +1,26 @@
+# mlx_lm.lora configuration for the Qwen2.5-1.5B narration student (v7 §45.5.3).
+# iters is scaled from the plan's 1200 (for 1,800 examples, about 5 epochs) to the
+# reduced corpus used on this machine; see llm/narration/corpus.py DEFAULT_COUNTS.
+model: mlx-community/Qwen2.5-1.5B-Instruct-4bit
+train: true
+data: data/working/llm/mlx
+fine_tune_type: lora
+seed: 1729
+num_layers: 8
+batch_size: 1
+grad_accumulation_steps: 8
+iters: 250
+learning_rate: 0.00002
+max_seq_length: 768
+steps_per_report: 10
+steps_per_eval: 50
+val_batches: 25
+save_every: 50
+mask_prompt: true
+grad_checkpoint: true
+adapter_path: artifacts/adapters/qwen2.5-1.5b-safety-wording
+lora_parameters:
+  rank: 8
+  scale: 16
+  dropout: 0.05
+  keys: ["self_attn.q_proj", "self_attn.v_proj"]

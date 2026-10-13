@@ -20,7 +20,9 @@ reviewable in a live Hugging Face Space with a Gemini-powered Q&A interface.
 | **Intake** | Samples frames from any MP4 via OpenCV; letterboxes to model input size |
 | **Detection** | YOLO11n detects persons and vehicles; ByteTrack assigns persistent track IDs |
 | **PPE assessment** | EfficientNet-B0 two-head classifier (helmet / vest / unknown) with per-track temporal smoothing; Gemini Vision reviews crops >= 160 px and overrides the classifier there (per-run SHA-256 cache, 429 retry, fail-fast on daily quota). Gemini-only when no weights are present |
-| **Rule engine** | R1–R5 hazard rules evaluated against real tracks; debounce and severity thresholds |
+| **Scene bootstrap** | One Gemini request per video proposes restricted zones and open edges from 8–12 keyframes; geometric cluster consensus keeps only shapes that recur (cached per video). Gemini's stated confidence is ignored |
+| **Geometry** | `yolo26n-pose` standing head/foot pairs fit a zero-roll pinhole ground plane (Huber loss, bootstrap uncertainty). Distances are in worker-height units with interval bands. Quality gates mark moving or sparse feeds `unsupported` instead of guessing |
+| **Rule engine** | R1–R5 hazard rules evaluated against real tracks; debounce and severity thresholds. R3 needs a consensus zone, R4 needs the ground plane, R5 needs an open edge plus the plane; each reports `inconclusive` or `unsupported_for_feed` with a reason code when its inputs are missing |
 | **Regulation RAG** | 27-clause BOCW Central Rules corpus in Supabase; hybrid BM25 + Gemini-embedding-001 (768-dim) retrieval via Reciprocal Rank Fusion + MMR deduplication |
 | **Grounded briefings** | Deterministic template grounded to retrieved clauses; ungrounded sentences refused |
 | **Gemini Q&A** | Run-scoped Q&A with trigram grounding check; legal-verdict requests refused |
@@ -61,17 +63,21 @@ llm/
   retrieval.py    BM25 + dense retrieval + MMR reranking + briefing builder
   qa.py           Gemini RAG Q&A with grounding post-pass
   adjudicator.py  Gemini Vision PPE crop assessor (reviewer in hybrid mode)
+  scene_proposals.py  Gemini scene-geometry request (one per video)
+  narration/      LoRA wording experiment: corpus, validator, teacher/student runners, evaluation
 pipeline/
   intake/         FrameSampler — OpenCV frame extraction + letterboxing
   vision/         Stage1Detector — YOLO11n + ByteTrack; ppe_model / ppe_temporal / ppe_stage
                   two-head PPE classifier, temporal filter, per-frame PPE stage
-  data/           PPE person-crop labelling from YOLO-format PPE datasets
-  rules/engine.py evaluate_real_rules() (R1+R2) and evaluate_fake_rules()
+  data/           PPE person-crop labelling (ppe_crops) and MJCSD stage-1 conversion (mjcsd)
+  scene/          Gemini keyframe proposals, geometric consensus, cached scene model
+  geometry/       pose keypoints, ground-plane fit, worker-height distances, camera-motion gate
+  rules/          engine.py (R1-R5), zone_rules (R3), proximity_rules (R4), edge_rules (R5)
   render/         render_twin_video() — side-by-side annotated feed + top-down map
   report/         build_report_html() — self-contained styled HTML report
 shared/           enums, config, coordinates, pydantic schemas
-evaluation/       demo inventory schema + CLI scaffold
-tools/            dataset fetching, CCTV clip utilities, PPE crop builder and trainer
+evaluation/       demo inventory, detection metrics (AP50, precision/recall), results/*.json
+tools/            dataset fetching, CCTV clip utilities, PPE and stage-1 builders and trainers
 ```
 
 ---
@@ -227,6 +233,40 @@ The Q&A stack uses a three-stage hybrid pipeline:
    < 8% overlap receive a visible low-evidence warning.
 7. **Legal guardrail** — questions requesting compliance verdicts, liability decisions, or
    legal certifications are refused outright.
+
+---
+
+## Experiments
+
+Results are committed under `evaluation/results/`; weights and corpora are local-only.
+
+**Stage-1 detector (MJCSD fine-tune).** Splits are by camera/day (seed 42017); cameras are
+*not* held out, so scores measure new days on known cameras.
+
+```bash
+uv run --extra vision python tools/build_stage1.py --source data/external/mjcsd/extracted/DATASET --max-train 3200
+uv run --extra vision python tools/train_stage1.py train --epochs 12    # ~85 min on Apple MPS
+uv run --extra vision python tools/train_stage1.py evaluate             # writes stage1.json
+```
+
+Person AP50 0.671 -> 0.871 and merged machinery AP50 0.129 -> 0.867 against the pretrained
+YOLO11n on 1,505 held-out frames. Copy `best.pt` to `artifacts/models/stage1/best.pt` to use it;
+the detector resolves classes by name, so the COCO and MJCSD weights are interchangeable.
+
+**Narration LoRA (Qwen2.5-7B teacher -> Qwen2.5-1.5B student, MLX, Apple silicon).**
+
+```bash
+uv sync --extra vision --extra train
+uv run safety-llm corpus seed && uv run safety-llm teacher generate   # ~45 min
+uv run safety-llm corpus gate && uv run safety-llm student train      # ~2 min
+uv run safety-llm eval run                                            # writes narration.json
+```
+
+The student does not pass the promotion gate (see `evaluation/results/narration.json`), so
+incident wording stays on the deterministic template. `llm.narration.narrate.narrate()` is the
+guarded entry point: any model failure or rejected generation falls back to the template.
+Human blind ratings and false-refusal rate are not measured; the rating sheet is written to
+`data/working/llm/blind/`.
 
 ---
 

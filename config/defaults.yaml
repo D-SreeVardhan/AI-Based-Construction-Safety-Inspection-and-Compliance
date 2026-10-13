@@ -52,6 +52,8 @@ pose:
   confidence_floor: 0.60
   sample_spacing_seconds: 0.50
   maximum_samples_per_track: 20
+  # Seeking and pose inference dominate the cost, so the whole pass is capped.
+  maximum_total_samples: 150
 
 relative_plane:
   minimum_pairs: 12
@@ -63,6 +65,14 @@ relative_plane:
   minimum_vertical_inlier_ratio: 0.65
   maximum_reprojection_rms_px: 3.0
   maximum_temporal_horizon_shift_px: 5.0
+  minimum_focal_width_ratio: 0.5
+  maximum_focal_width_ratio: 3.0
+  maximum_condition_number: 1.0e8
+  inlier_sigma: 3.0
+  head_sigma_fraction: 0.03
+  foot_sigma_fraction: 0.015
+  support_expansion_wh: 0.5
+  maximum_camera_shift_px: 24.0
 
 uncertainty:
   bootstrap_samples: 500
@@ -80,6 +90,11 @@ scene:
   minimum_support_fraction: 0.60
   zone_cluster_iou: 0.35
   edge_cluster_diagonal_distance: 0.02
+  # Consensus results are cached here by video hash and every processing version.
+  cache_dir: data/cache/scene
+  keyframe_image_width: 960
+  # Laplacian variance below this marks a keyframe too blurred to propose geometry from.
+  minimum_keyframe_sharpness: 40.0
 
 rules:
   ppe_confidence_floor: 0.70
@@ -94,6 +109,11 @@ rules:
   r4_near_max_wh: 1.5
   r4_caution_max_wh: 3.0
   r5_edge_max_wh: 0.8
+  r4_vehicle_inflation_wh: 0.50
+  r4_state_window_seconds: 2.0
+  r4_active_speed_wh_s: 0.15
+  r4_active_displacement_wh: 0.25
+  r4_candidate_max_wh: 8.0
 
 render:
   output_width: 1920

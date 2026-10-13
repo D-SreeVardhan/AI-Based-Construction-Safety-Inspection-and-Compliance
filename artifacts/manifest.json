@@ -4,9 +4,18 @@
     {
       "name": "stage1",
       "type": "local_checkpoint",
-      "sha256": null,
+      "sha256": "c4c2d4569a8941b0d6c2ef3a93baeb5447ce6ad0e63a9097e720391ef00c1030",
       "destination": "artifacts/models/stage1/best.pt",
+      "built_by": "tools/train_stage1.py train --epochs 12 (yolo11n_mjcsd_v1)",
       "required_for": ["runtime"]
+    },
+    {
+      "name": "narration_adapter",
+      "type": "local_checkpoint",
+      "sha256": "3ac21ecdfe151c3a986073af3fc1db188d0207ad655c99496d1ba2aadd1a3d10",
+      "destination": "artifacts/adapters/qwen2.5-1.5b-safety-wording/adapters.safetensors",
+      "built_by": "safety-llm student train (not promoted; see evaluation/results/narration.json)",
+      "required_for": []
     },
     {
       "name": "ppe",
@@ -20,7 +29,7 @@
       "name": "pose",
       "type": "ultralytics_asset",
       "asset_id": "yolo26n-pose.pt",
-      "sha256": null,
+      "sha256": "eb3bb8268828aeaf515cec23a4bfafd793944a86fe9af94ba7823609c14522a9",
       "destination": "artifacts/models/pose/yolo26n-pose.pt",
       "required_for": ["relative_plane"]
     }

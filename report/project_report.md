@@ -167,11 +167,13 @@ If the student model produces invalid output, the application silently falls bac
 
 | Property | Choice |
 |----------|--------|
-| **Model** | Ultralytics YOLO26 small |
+| **Model** | Ultralytics YOLO11n, fine-tuned on MJCSD (five classes: person, excavator, crane, truck, other machinery) |
 | **Input resolution** | 960 pixels |
 | **Runtime** | Apple MPS (Metal) |
 
-**Reason for choice:** YOLO26 is the current generation of Ultralytics' YOLO family. Its single-pass architecture provides the best trade-off between speed and accuracy on M1 hardware. The small variant fits within the 16 GB unified memory budget and runs at 15 frames per second. YOLO26 has strong community support, an open-source licence compatible with academic use, and native Apple Silicon acceleration via the Ultralytics library.
+**Implemented result (2026-10-13, `evaluation/results/stage1.json`):** 12 epochs on 3,200 MJCSD frames, evaluated on 1,505 held-out frames from unseen camera-days. Against the pretrained COCO YOLO11n, person AP50 rose from 0.671 to 0.871 (recall at the pipeline's 0.20 confidence 0.590 to 0.870) and merged machinery AP50 from 0.129 to 0.867. Limits: splits hold out days, not cameras, so this does not show generalisation to new sites; only 74 crane and 11 other-machinery training boxes exist, so those two classes are not reliably learned and the pipeline treats every machinery class as `vehicle`. The original plan named YOLO26 small; YOLO11n was kept because the whole pipeline already ran on it and it fits the laptop budget.
+
+**Reason for choice (original plan):** YOLO26 is the current generation of Ultralytics' YOLO family. Its single-pass architecture provides the best trade-off between speed and accuracy on M1 hardware. The small variant fits within the 16 GB unified memory budget and runs at 15 frames per second. YOLO26 has strong community support, an open-source licence compatible with academic use, and native Apple Silicon acceleration via the Ultralytics library.
 
 **Alternatives considered:**
 
@@ -248,7 +250,7 @@ If the student model produces invalid output, the application silently falls bac
 
 | Property | Choice |
 |----------|--------|
-| **Model** | Gemini 2.5 Flash, pinned revision |
+| **Model** | Gemini, model id from `scene.gemini_model` (currently `gemini-3.5-flash-lite`) |
 | **Call frequency** | Once per new video; results cached indefinitely |
 | **Output** | Structured zone polygons and zone type labels |
 
@@ -286,7 +288,11 @@ If the student model produces invalid output, the application silently falls bac
 
 ---
 
-### 3.7 Geometry Estimation — RANSAC Vanishing-Point Fitting
+### 3.7 Geometry Estimation — Robust Parametric Ground-Plane Fit
+
+**Implemented method (differs from the original plan):** instead of RANSAC with a vanishing-point initialisation, the pipeline fits a zero-roll pinhole camera (pitch, focal length, camera height in worker-height units) to standing head/foot keypoint pairs by minimising a Huber-loss head-pixel residual over a 36-start grid, with scipy `least_squares`. Fixing a standing worker's height at 1 WH sets the unit. Uncertainty comes from 500 cluster/block bootstrap replicates; quality gates cover pair count, distinct tracks, focal range, inlier ratio, reprojection RMS (3 px, not yet tuned on real data), horizon stability and camera motion (phase correlation, 24 px). Failing any gate returns an unavailable plane with a reason code, and R4/R5 report `inconclusive` or `unsupported_for_feed`. Synthetic tests recover the camera; on the real SARD clips tried so far (few workers, multi-level scenes, moving cameras) the gates fail honestly, so R4/R5 have not alerted on real footage. Roll is assumed zero, all heights are fixed at 1 WH, and no articulation score exists, so machinery is only ever `ACTIVE` or `UNKNOWN`.
+
+**Original plan text:** RANSAC vanishing-point fitting.
 
 **Reason for choice:** RANSAC robustly rejects outlier observations — workers in non-standing poses, partially visible ankles — and produces a stable ground-plane estimate without requiring camera calibration data or a physical reference target in the scene. The fit diagnostics are stored in the run manifest, making the result fully auditable.
 
@@ -387,6 +393,7 @@ These are deliberate, reasoned trade-offs made within the constraints of a 12-we
 **What we give up:** The potential for richer, more contextual alert narrative text.
 **What we gain:** A system whose safety logic is entirely deterministic and auditable. The language model generates only a short reasoning explanation and a plain-language wording of the recommended action — it never determines the rule, the severity, the basis, or the regulatory reference.
 **Mitigation:** If the student model produces invalid or schema-violating output, the application uses the fixed rule template automatically and silently.
+**Measured outcome (`evaluation/results/narration.json`):** corpus scaled to 400 train / 60 val / 80 test generated scenarios plus a 40-row author-written holdout; Qwen2.5-7B teacher, Qwen2.5-1.5B student with LoRA on `q_proj`/`v_proj` (311,296 trainable parameters, asserted against MLX), 250 iterations. Fully valid output on the holdout: template 100%, base few-shot 92.5%, LoRA student 75%, teacher 97.5%. The student fails the promotion gate (5 compliance-language outputs, 17.5% unsupported claims, 95% observation consistency), so the application keeps the template; `llm.narration.narrate.narrate()` guarantees the fallback. Not measured: false-refusal rate and human blind ratings (the rating sheet is exported but unrated). The holdout is author-written, not independent, and the corpus is far smaller than the plan's 1,800/300/300/120.
 
 ---
 
@@ -418,13 +425,13 @@ These are deliberate, reasoned trade-offs made within the constraints of a 12-we
 
 | Dimension | Chosen Approach | Key Trade-off |
 |-----------|----------------|---------------|
-| Detection | YOLO26 small | Speed vs. peak accuracy |
+| Detection | YOLO11n fine-tuned on MJCSD (person AP50 0.87 vs 0.67 pretrained; unseen days, known cameras) | Speed vs. peak accuracy |
 | Tracking | ByteTrack | Robustness vs. re-identification quality |
 | PPE classification | Custom two-head crop classifier | Auditability vs. dataset scale |
-| Pose and geometry | YOLO26n-Pose with RANSAC fitting | No calibration target required |
-| Scene semantics | Gemini 2.5 Flash (cached) with local fallback | API dependency vs. semantic quality |
+| Pose and geometry | YOLO26n-Pose with Huber-loss pinhole fit and bootstrap gates | No calibration target required; fails closed on moving or sparse feeds |
+| Scene semantics | Gemini (`gemini-3.5-flash-lite`, one request per video, cached, consensus-filtered) | API dependency vs. semantic quality |
 | Distance reporting | Worker-Height units | Calibration-free vs. metric |
-| LLM narration | Qwen2.5-1.5B fine-tuned (experiment only) | Academic requirement vs. runtime reliability |
+| LLM narration | Qwen2.5-1.5B LoRA (experiment; not promoted, template serves) | Academic requirement vs. runtime reliability |
 | Training data | MJCSD + open PPE datasets (trainable); SARD + SteelBench (evaluation-only) | Dataset scale vs. licence and provenance integrity |
 | Output format | 1920×1080 H.264 side-by-side video | Standalone portability |
 | Deployment | Local desktop, offline-first | No cloud costs or authentication complexity |

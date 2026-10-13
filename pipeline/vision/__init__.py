@@ -24,9 +24,22 @@ except ImportError:
     _YOLO = None  # type: ignore[assignment,misc]
     _HAS_ULTRALYTICS = False
 
-# COCO class indices relevant to construction sites
-_PERSON_CLS = 0
-_VEHICLE_CLS: frozenset[int] = frozenset({1, 2, 3, 5, 6, 7, 8})
+# Resolved by class name so the COCO baseline and the MJCSD fine-tune share one code path.
+PERSON_NAMES: frozenset[str] = frozenset({"person"})
+VEHICLE_NAMES: frozenset[str] = frozenset(
+    {"bicycle", "car", "motorcycle", "bus", "train", "truck", "boat"}  # COCO
+    | {"excavator", "crane", "other_machinery"}  # MJCSD stage-1 taxonomy (truck shared)
+)
+
+
+def class_ids(names: dict[int, str]) -> tuple[frozenset[int], frozenset[int]]:
+    """(person ids, vehicle ids) for a detector's ``names`` mapping."""
+    return (
+        frozenset(i for i, n in names.items() if n in PERSON_NAMES),
+        frozenset(i for i, n in names.items() if n in VEHICLE_NAMES),
+    )
+
+
 _MIN_CROP_PX = 40  # minimum bounding-box side length to extract a crop
 _UNKNOWN_PPE = (
     HelmetRecord(state=HelmetState.UNKNOWN, confidence=0.0, visible=True),
@@ -80,6 +93,7 @@ class Stage1Detector:
         self.tracker_config = tracker_config
         self.shot_id = shot_id
         self._model = self._load_model(Path(config.model_path))
+        self._person_ids, self._vehicle_ids = class_ids(self._model.names)
 
     @staticmethod
     def _load_model(model_path: Path) -> _YOLO:  # type: ignore[return]
@@ -125,7 +139,7 @@ class Stage1Detector:
                 imgsz=self.config.image_size,
                 device=self.config.device,
                 verbose=False,
-                classes=[_PERSON_CLS, *_VEHICLE_CLS],
+                classes=sorted(self._person_ids | self._vehicle_ids),
             )
             if not results:
                 continue
@@ -136,7 +150,7 @@ class Stage1Detector:
             detections: list[tuple[int, bool, str, Box2]] = []
             for i in range(len(boxes)):
                 track_id = int(boxes.id[i])
-                is_person = int(boxes.cls[i]) == _PERSON_CLS
+                is_person = int(boxes.cls[i]) in self._person_ids
                 object_class = "person" if is_person else "vehicle"
                 x1, y1, x2, y2 = (float(v) for v in boxes.xyxy[i].tolist())
                 box = Box2(x1=x1, y1=y1, x2=x2, y2=y2, space=CoordinateSpace.REFERENCE)

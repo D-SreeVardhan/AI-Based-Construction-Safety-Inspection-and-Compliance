@@ -1,0 +1,12 @@
+# MJCSD label -> stage-1 class (v7 §34.1). A null maps the label out of training; a label
+# absent from this file is rejected by tools/build_stage1.py rather than silently mapped.
+worker: person
+excavator: excavator
+crane: crane
+truck: truck
+tanker: truck
+elevator: other_machinery
+motorcycle: null
+extinguisher: null
+roadblock: null
+helmet: null

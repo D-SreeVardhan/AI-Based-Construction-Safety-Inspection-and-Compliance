@@ -10,9 +10,11 @@ from pipeline.render import (
     _C_OK,
     _C_VIOLATION,
     _FONT,
+    _draw_scene_shapes,
     _draw_status_panel,
     _fit_text,
     _Letterbox,
+    _load_scene_shapes,
     _reencode_h264,
     _to_map_coords,
     render_twin_video,
@@ -142,3 +144,27 @@ def test_render_twin_video_outputs_side_by_side_frames(tmp_path: Path) -> None:
     if shutil.which("ffmpeg"):
         data = output.read_bytes()
         assert 0 <= data.find(b"moov") < data.find(b"mdat")
+
+
+def test_scene_shapes_are_drawn_and_filtered_by_status(tmp_path: Path) -> None:
+    zone = {
+        "proposal_id": "restricted_zone-1",
+        "proposal_type": "restricted_zone",
+        "geometry_type": "polygon",
+        "points": [[50, 50], [250, 50], [250, 150], [50, 150]],
+    }
+    guardrail = {**zone, "proposal_id": "g-1", "proposal_type": "visible_guardrail"}
+    scene = tmp_path / "scene.json"
+    scene.write_text(json.dumps({"status": "ok", "proposals": [zone, guardrail]}))
+    shapes = _load_scene_shapes(tmp_path)
+    assert [s["proposal_id"] for s in shapes] == ["restricted_zone-1"]
+
+    canvas = np.zeros((200, 300, 3), dtype=np.uint8)
+    _draw_scene_shapes(canvas, shapes, lambda x, y: (int(x), int(y)))
+    assert canvas[100, 150].any()
+    assert not canvas[190, 10].any()
+
+    scene.write_text(json.dumps({"status": "unavailable", "proposals": [zone]}))
+    assert _load_scene_shapes(tmp_path) == []
+    scene.unlink()
+    assert _load_scene_shapes(tmp_path) == []

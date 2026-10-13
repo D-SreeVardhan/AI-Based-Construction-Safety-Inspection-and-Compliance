@@ -17,7 +17,7 @@ from llm.adjudicator import AdjudicationResult
 from pipeline.vision import PersonCrop
 from shared.config import load_config
 from shared.coordinates import Box2, Point2
-from shared.enums import CoordinateSpace, HelmetState, ProcessingStatus, VestState
+from shared.enums import CoordinateSpace, HelmetState, ProcessingStatus, RuleStatus, VestState
 from shared.schemas.tracks import HelmetRecord, Pass1TrackObservation, VestRecord
 
 
@@ -114,6 +114,17 @@ def test_real_pipeline_no_gemini_key_completes_with_unknown_ppe(
     assert manifest.status == ProcessingStatus.COMPLETED
     assert manifest.gemini_status == "no_key"
     assert all(t["helmet"]["state"] == "unknown" for t in _tracks(job))
+
+    # The input is not a decodable video, so both geometry stages must degrade, not crash.
+    scene = json.loads((job.run_dir / "scene.json").read_text())
+    geometry = json.loads((job.run_dir / "geometry.json").read_text())
+    assert scene["status"] == "unavailable" and geometry["status"] == "unavailable"
+    assert manifest.scene_cache_status == "unavailable"
+    assert {"scene", "geometry"} <= set(manifest.output_artifacts)
+    coverage = {c.rule_id.value: c for c in manifest.rule_coverage}
+    assert coverage["R3"].status == RuleStatus.INCONCLUSIVE
+    assert coverage["R5"].status == RuleStatus.INCONCLUSIVE
+    assert any("Relative ground plane unavailable" in w for w in manifest.warnings)
 
 
 def test_real_pipeline_applies_adjudication_to_frozen_observations(

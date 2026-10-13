@@ -24,6 +24,7 @@ import logging
 import shutil
 import subprocess
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -43,12 +44,16 @@ _C_VEHICLE = (200, 160, 50)  # teal   — vehicle box
 _C_BANNER_BG = (20, 20, 20)  # near-black banner background
 _C_BANNER_ALERT = (40, 40, 220)  # red banner for alert
 _C_BANNER_INFO = (130, 90, 30)  # dark amber for info
+_C_ZONE = (170, 60, 150)  # plum   — inferred restricted zone
+_C_EDGE = (0, 140, 255)  # orange — inferred open edge
 _C_TEXT = (240, 240, 240)  # off-white text
 _C_WATERMARK = (80, 80, 80)  # dark grey watermark
 
 _FONT = cv2.FONT_HERSHEY_SIMPLEX
 _THICKNESS_BOX = 2
 _THICKNESS_TEXT = 1
+
+_SCENE_SHAPE_TYPES = frozenset({"restricted_zone", "open_edge"})
 
 # How long to show an incident banner after it resolves (extra hold seconds)
 _BANNER_HOLD_S = 2.0
@@ -268,6 +273,46 @@ def _load_run_artifacts(
     return tracks, incidents, coverage
 
 
+def _load_scene_shapes(run_dir: Path) -> list[dict[str, Any]]:
+    """Restricted zones and open edges from ``scene.json``; empty when absent or unavailable."""
+    scene_path = run_dir / "scene.json"
+    if not scene_path.exists():
+        return []
+    scene = json.loads(scene_path.read_text(encoding="utf-8"))
+    if scene.get("status") != "ok":
+        return []
+    return [p for p in scene.get("proposals", []) if p.get("proposal_type") in _SCENE_SHAPE_TYPES]
+
+
+def _draw_scene_shapes(
+    canvas: np.ndarray,
+    shapes: list[dict[str, Any]],
+    project: Callable[[float, float], tuple[int, int]],
+) -> None:
+    """Draw inferred zones (translucent fill) and edges (line) through ``project``."""
+    for shape in shapes:
+        points = np.array([project(x, y) for x, y in shape["points"]], dtype=np.int32)
+        label = shape["proposal_id"]
+        if shape["geometry_type"] == "polygon":
+            overlay = canvas.copy()
+            cv2.fillPoly(overlay, [points], _C_ZONE)
+            cv2.addWeighted(overlay, 0.22, canvas, 0.78, 0, dst=canvas)
+            cv2.polylines(canvas, [points], True, _C_ZONE, 2, cv2.LINE_AA)
+            colour = _C_ZONE
+        else:
+            cv2.polylines(canvas, [points], False, _C_EDGE, 3, cv2.LINE_AA)
+            colour = _C_EDGE
+        anchor = points[0]
+        _put_text_with_bg(
+            canvas,
+            f"{label} (inferred)",
+            int(anchor[0]) + 4,
+            int(anchor[1]) + 14,
+            scale=0.38,
+            fg=colour,
+        )
+
+
 def _reencode_h264(output_path: Path, crf: int) -> None:
     """Re-encode the OpenCV mp4v output to H.264; keep the original if ffmpeg fails."""
     if not shutil.which("ffmpeg"):
@@ -402,6 +447,7 @@ def _render_map_pane(
     map_w: int,
     map_h: int,
     coverage: list[dict[str, Any]],
+    scene_shapes: list[dict[str, Any]] | None = None,
 ) -> np.ndarray:
     """Render one top-down map frame. Observation coords are in *lb*'s canvas."""
     canvas = np.full((map_h, map_w, 3), _MAP_BG, dtype=np.uint8)
@@ -409,6 +455,8 @@ def _render_map_pane(
 
     def project(x: float, y: float) -> tuple[int, int]:
         return _to_map_coords(x, y, lb=lb, map_w=map_w, map_h=map_h)
+
+    _draw_scene_shapes(canvas, scene_shapes or [], project)
 
     # Active incident track IDs (for alert rings)
     alert_tracks = {inc.get("canonical_track_id", "") for inc in active_incidents}
@@ -499,6 +547,7 @@ def render_twin_video(
     worker dots coloured by PPE state, vehicle footprints, and alert rings.
     """
     tracks, incidents, coverage = _load_run_artifacts(run_dir)
+    scene_shapes = _load_scene_shapes(run_dir)
     by_time = _build_track_index(tracks)
     sorted_times = sorted(by_time)
 
@@ -557,6 +606,8 @@ def render_twin_video(
                 pane_lb.y_off : pane_lb.y_off + pane_lb.h, pane_lb.x_off : pane_lb.x_off + pane_lb.w
             ] = resized_l
 
+            _draw_scene_shapes(left, scene_shapes, lambda x, y: detector_lb.to_other(pane_lb, x, y))
+
             obs_list = _nearest_obs(by_time, sorted_times, video_time_s)
             active = _active_incidents(incidents, video_time_s)
 
@@ -610,6 +661,7 @@ def render_twin_video(
                 map_w=pane_w,
                 map_h=pane_h,
                 coverage=coverage,
+                scene_shapes=scene_shapes,
             )
 
             combined = np.hstack([left, right])
