@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from pipeline.rules.windows import longest_window
+from pipeline.rules.zone_rules import evaluate_r3
 from shared.config import RulesConfig
 from shared.enums import HelmetState, RuleId, RuleStatus, VestState
 from shared.schemas.incidents import IncidentRecord, RuleResult
 from shared.schemas.run import RuleCoverageEntry
+from shared.schemas.scene import SceneModel
 from shared.schemas.tracks import Pass1TrackObservation
 
 NO_PPE_EVIDENCE = "no_ppe_evidence"
@@ -127,24 +130,9 @@ def _r1_eval(
             reason_code="no_helmet_alerts_detected",
         )
 
-    # Find first contiguous window exceeding debounce
-    window_start = no_helmet[0]
-    window_end = no_helmet[0]
-    best_start, best_end = window_start, window_end
-    best_span = 0.0
-
-    for obs_item in no_helmet[1:]:
-        gap = obs_item.video_time_s - window_end.video_time_s
-        if gap <= debounce_s * 2:
-            window_end = obs_item
-        else:
-            span = window_end.video_time_s - window_start.video_time_s
-            if span > best_span:
-                best_span, best_start, best_end = span, window_start, window_end
-            window_start = window_end = obs_item
-    span = window_end.video_time_s - window_start.video_time_s
-    if span > best_span:
-        best_span, best_start, best_end = span, window_start, window_end
+    window = longest_window(no_helmet, debounce_s * 2)
+    assert window is not None  # no_helmet is non-empty here
+    best_start, best_end, best_span = window
 
     if best_span < debounce_s:
         return None, RuleCoverageEntry(
@@ -202,15 +190,16 @@ def evaluate_real_rules(
     observations: list[Pass1TrackObservation],
     catalogue_sha256: str,
     config: RulesConfig,
+    scene: SceneModel | None = None,
 ) -> tuple[tuple[RuleCoverageEntry, ...], tuple[IncidentRecord, ...], tuple[RuleResult, ...]]:
-    """Evaluate R1–R5 against real YOLO + Gemini adjudicator tracks.
+    """Evaluate R1–R5 against real tracks.
 
     R1  Missing helmet — fires when a person track shows NO_HELMET for the
         configured debounce window.
     R2  Missing hi-vis near machinery — fires when NO_VEST coincides with a
         vehicle track within the proximity bands.
-    R3–R5  Unsupported until the scene bootstrap and relative-plane mapping
-        layers are implemented.
+    R3  Restricted-zone intrusion — worker anchor inside a scene-bootstrap zone.
+    R4–R5  Unsupported until the relative-plane mapping layer is implemented.
 
     Returns the same ``(coverage, incidents, results)`` triple as
     ``evaluate_fake_rules``.
@@ -339,15 +328,20 @@ def evaluate_real_rules(
             r2_status = RuleStatus.EVALUATED_CLEAR
             r2_reason = "no_vest_alerts_near_vehicle"
 
-    all_incidents = (*r1_incidents, *r2_incidents)
+    r3_incidents, r3_coverage = evaluate_r3(
+        run_id=run_id,
+        shot_id=shot_id,
+        catalogue_sha256=catalogue_sha256,
+        scene=scene,
+        person_tracks=person_tracks,
+        debounce_s=config.r3_debounce_seconds,
+    )
+
+    all_incidents = (*r1_incidents, *r2_incidents, *r3_incidents)
     coverage = (
         RuleCoverageEntry(rule_id=RuleId.R1, status=r1_status, reason_code=r1_reason),
         RuleCoverageEntry(rule_id=RuleId.R2, status=r2_status, reason_code=r2_reason),
-        RuleCoverageEntry(
-            rule_id=RuleId.R3,
-            status=RuleStatus.UNSUPPORTED,
-            reason_code="no_zone_geometry",
-        ),
+        r3_coverage,
         RuleCoverageEntry(
             rule_id=RuleId.R4,
             status=RuleStatus.INCONCLUSIVE,

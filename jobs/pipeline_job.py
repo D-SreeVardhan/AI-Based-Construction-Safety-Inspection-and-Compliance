@@ -21,6 +21,7 @@ from pipeline.intake import FrameSampler
 from pipeline.render import render_twin_video
 from pipeline.report import build_report_html
 from pipeline.rules.engine import evaluate_fake_rules, evaluate_real_rules
+from pipeline.scene import bootstrap_scene
 from pipeline.vision import PersonCrop, Stage1Detector
 
 try:
@@ -38,6 +39,7 @@ from shared.enums import (
 )
 from shared.schemas.jobs import JobRecord
 from shared.schemas.run import InputVideoMeta, PassTiming, RunManifest
+from shared.schemas.scene import SceneModel
 from shared.schemas.tracks import HelmetRecord, Pass1TrackObservation, VestRecord
 
 
@@ -75,6 +77,22 @@ def load_ppe_stage(config: AppConfig) -> PPEStage | None:
     except (OSError, RuntimeError, KeyError) as exc:
         warnings.warn(f"PPE classifier failed to load ({exc}); using Gemini-only PPE", stacklevel=2)
         return None
+
+
+def _detector_id(model_path: str) -> str:
+    path = Path(model_path)
+    return f"{model_path}:{_sha256_file(path)[:16]}" if path.is_file() else model_path
+
+
+def _scene_warnings(scene: SceneModel) -> list[str]:
+    if scene.status != "ok":
+        return [
+            f"Scene bootstrap unavailable ({scene.status_reason}); R3 and R5 cannot be "
+            "evaluated for this run."
+        ]
+    if not scene.proposals:
+        return ["Scene bootstrap found no zones or edges with enough keyframe agreement."]
+    return []
 
 
 def _crop_name(crop: PersonCrop) -> str:
@@ -602,13 +620,28 @@ class RealPipelineJob:
             "tracks_with_no_vest": len(no_vest_tracks),
         }
 
-        # --- Stage 3: Rules evaluation ---
+        # --- Stage 3: Scene bootstrap, then rules ---
         job = job.model_copy(
             update={
                 "stage": JobStage.MAPPING_RULES,
-                "progress": 0.65,
-                "message": "Evaluating R1–R5 against real tracks",
+                "progress": 0.60,
+                "message": "Inferring restricted zones and open edges",
             }
+        )
+        self._write_json(self.run_dir / "job.json", job)
+
+        scene, scene_cache_status = bootstrap_scene(
+            sampler=sampler,
+            observations=observations,
+            video_sha256=input_meta.sha256,
+            detector_id=_detector_id(self.config.stage1.model_path),
+            config=self.config,
+            api_key=self.gemini_api_key,
+        )
+        self._write_json(self.run_dir / "scene.json", scene)
+
+        job = job.model_copy(
+            update={"progress": 0.65, "message": "Evaluating R1–R5 against real tracks"}
         )
         self._write_json(self.run_dir / "job.json", job)
 
@@ -618,6 +651,7 @@ class RealPipelineJob:
             observations=observations,
             catalogue_sha256=CATALOGUE_SHA256,
             config=self.config.rules,
+            scene=scene,
         )
         briefings = tuple(build_grounded_briefing(incident) for incident in incidents)
 
@@ -654,6 +688,7 @@ class RealPipelineJob:
             "incidents": "incidents.json",
             "tracks": "tracks.jsonl",
             "run_manifest": "run_manifest.json",
+            "scene": "scene.json",
         }
         if ppe_stage is not None:
             artifacts["ppe_verification"] = "ppe_verification.json"
@@ -685,6 +720,7 @@ class RealPipelineJob:
         if not hash_complete:
             run_warnings.append("Input fingerprint is a head/tail sample, not a full-file SHA-256.")
         run_warnings.extend(ppe.warnings)
+        run_warnings.extend(_scene_warnings(scene))
 
         manifest = RunManifest(
             run_id=self.run_id,
@@ -696,17 +732,22 @@ class RealPipelineJob:
             model_ids={
                 "stage1": str(self.config.stage1.model_path),
                 "ppe": ppe.model_id,
+                **({"scene": f"gemini-consensus/{scene.model_id}"} if scene.status == "ok" else {}),
                 "rag": RETRIEVAL_MODE,
                 "briefing": "deterministic-grounded-briefing-v1",
             },
-            dependency_versions={"pipeline": "real-0.2.0"},
-            prompt_versions={"briefing_template": "deterministic-v1", "ppe": "ppe-v1"},
+            dependency_versions={"pipeline": "real-0.3.0"},
+            prompt_versions={
+                "briefing_template": "deterministic-v1",
+                "ppe": "ppe-v1",
+                "scene": self.config.scene.prompt_version,
+            },
             gemini_status=_gemini_status(
                 has_key=bool(self.gemini_api_key),
                 failed=len(ppe.errors),
                 total=ppe.sent,
             ),
-            scene_cache_status="none",
+            scene_cache_status=scene_cache_status,
             rule_coverage=coverage,
             warnings=tuple(run_warnings),
             pass_timings=(timing,),

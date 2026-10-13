@@ -89,6 +89,9 @@ class SceneConfig(StrictModel):
     minimum_support_fraction: float
     zone_cluster_iou: float
     edge_cluster_diagonal_distance: float
+    cache_dir: str
+    keyframe_image_width: int
+    minimum_keyframe_sharpness: float
 
 
 class RulesConfig(StrictModel):

@@ -213,7 +213,7 @@ def test_unknown_ppe_everywhere_is_inconclusive_not_clear() -> None:
         assert by_rule[rule].reason_code == "no_ppe_evidence"
 
 
-def test_r3_r5_always_unsupported() -> None:
+def test_r3_needs_scene_and_r5_is_unsupported() -> None:
     coverage, _, _ = evaluate_real_rules(
         run_id="test-run",
         shot_id="s0",
@@ -223,5 +223,6 @@ def test_r3_r5_always_unsupported() -> None:
     )
     r3 = next(c for c in coverage if c.rule_id == RuleId.R3)
     r5 = next(c for c in coverage if c.rule_id == RuleId.R5)
-    assert r3.status == RuleStatus.UNSUPPORTED
+    assert r3.status == RuleStatus.INCONCLUSIVE
+    assert r3.reason_code == "restricted_zone_scene_state_unavailable"
     assert r5.status == RuleStatus.UNSUPPORTED

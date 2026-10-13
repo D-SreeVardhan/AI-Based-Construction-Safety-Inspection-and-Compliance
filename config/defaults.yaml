@@ -80,6 +80,11 @@ scene:
   minimum_support_fraction: 0.60
   zone_cluster_iou: 0.35
   edge_cluster_diagonal_distance: 0.02
+  # Consensus results are cached here by video hash and every processing version.
+  cache_dir: data/cache/scene
+  keyframe_image_width: 960
+  # Laplacian variance below this marks a keyframe too blurred to propose geometry from.
+  minimum_keyframe_sharpness: 40.0
 
 rules:
   ppe_confidence_floor: 0.70
