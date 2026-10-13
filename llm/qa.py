@@ -95,11 +95,25 @@ def _build_context(
     briefings: tuple[GroundedBriefing, ...],
     coverage: tuple[RuleCoverageEntry, ...],
     retrieved_chunks: list,
+    detection_summary: dict[str, int] | None = None,
 ) -> str:
     """Assemble a compact context block for the Gemini prompt."""
     lines: list[str] = []
 
-    lines.append("=== RULE COVERAGE ===")
+    if detection_summary:
+        lines.append("=== DETECTION SUMMARY ===")
+        lines.append(
+            f"Unique person tracks detected: {detection_summary.get('unique_person_tracks', '?')}"
+        )
+        lines.append(
+            f"Unique vehicle tracks detected: {detection_summary.get('unique_vehicle_tracks', '?')}"
+        )
+        no_h = detection_summary.get("tracks_with_no_helmet", "?")
+        no_v = detection_summary.get("tracks_with_no_vest", "?")
+        lines.append(f"Person tracks flagged no helmet: {no_h}")
+        lines.append(f"Person tracks flagged no vest: {no_v}")
+
+    lines.append("\n=== RULE COVERAGE ===")
     for cov in coverage:
         lines.append(f"{cov.rule_id.value}: {cov.status.value} ({cov.reason_code})")
 
@@ -189,6 +203,7 @@ def answer_run_question(
     gemini_api_key: str | None = None,
     embeddings: dict[str, list[float]] | None = None,
     gemini_model: str | None = None,
+    detection_summary: dict[str, int] | None = None,
 ) -> RunQuestionAnswer:
     """Answer a question about a completed run.
 
@@ -246,6 +261,7 @@ def answer_run_question(
             briefings=briefings,
             coverage=coverage,
             retrieved_chunks=list(retrieved),
+            detection_summary=detection_summary,
         )
         try:
             answer = _call_gemini_qa(

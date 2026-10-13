@@ -150,6 +150,7 @@ class DeskHandler(BaseHTTPRequestHandler):
             briefings=briefings,
             gemini_api_key=os.environ.get("GEMINI_API_KEY"),
             embeddings=get_embeddings(),
+            detection_summary=manifest.get("detection_summary") or {},
         )
         self._send_json(200, answer.model_dump(mode="json"))
 

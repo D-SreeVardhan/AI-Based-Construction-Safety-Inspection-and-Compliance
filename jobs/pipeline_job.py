@@ -568,6 +568,25 @@ class RealPipelineJob:
                 handle.write(obs.model_dump_json())
                 handle.write("\n")
 
+        # Compute detection summary for Q&A context
+        person_tracks = {o.canonical_track_id for o in observations if o.object_class == "person"}
+        vehicle_tracks = {o.canonical_track_id for o in observations if o.object_class != "person"}
+        no_helmet_tracks = {
+            o.canonical_track_id
+            for o in observations
+            if o.helmet and o.helmet.state.value == "no_helmet"
+        }
+        no_vest_tracks = {
+            o.canonical_track_id for o in observations if o.vest and o.vest.state.value == "no_vest"
+        }
+        detection_summary: dict[str, int] = {
+            "unique_person_tracks": len(person_tracks),
+            "unique_vehicle_tracks": len(vehicle_tracks),
+            "total_person_observations": sum(1 for o in observations if o.object_class == "person"),
+            "tracks_with_no_helmet": len(no_helmet_tracks),
+            "tracks_with_no_vest": len(no_vest_tracks),
+        }
+
         # --- Stage 3: Rules evaluation ---
         job = job.model_copy(
             update={
@@ -691,6 +710,7 @@ class RealPipelineJob:
             warnings=tuple(run_warnings),
             pass_timings=(timing,),
             output_artifacts=artifacts,
+            detection_summary=detection_summary,
         )
         self._write_json(self.run_dir / "run_manifest.json", manifest)
 

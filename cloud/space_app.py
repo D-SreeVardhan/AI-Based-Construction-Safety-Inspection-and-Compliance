@@ -134,6 +134,7 @@ def ask_run(run_id: str | None, question: str) -> str:
             briefings=briefings,
             gemini_api_key=config.gemini_api_key,
             embeddings=get_embeddings(),
+            detection_summary=manifest.get("detection_summary") or {},
         )
         try:
             client.upsert(

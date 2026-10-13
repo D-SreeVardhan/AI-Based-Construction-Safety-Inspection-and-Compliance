@@ -47,6 +47,7 @@ class RunManifest(StrictModel):
     failures: tuple[str, ...] = ()
     pass_timings: tuple[PassTiming, ...] = ()
     output_artifacts: dict[str, str] = Field(default_factory=dict)
+    detection_summary: dict[str, int] = Field(default_factory=dict)
     disclaimer: str = (
         "Approximate 2.5D visualization — positions and zones are inferred from video. "
         "Heuristic triage only; not legal advice or certified safety measurement."
