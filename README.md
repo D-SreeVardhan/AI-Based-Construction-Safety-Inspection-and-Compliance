@@ -1,8 +1,8 @@
 # Construction Safety Twin
 
 Automated CCTV safety-inspection triage for construction sites. Processes site footage
-locally with YOLO11n + ByteTrack detection, classifies PPE compliance with Gemini Vision,
-evaluates five hazard rules, and produces incident records, regulation-grounded briefings,
+locally with YOLO11n + ByteTrack detection, classifies PPE compliance with a trained
+two-head classifier reviewed by Gemini Vision, evaluates five hazard rules, and produces incident records, regulation-grounded briefings,
 and a provenance-stamped HTML report. Completed runs are published to Supabase and
 reviewable in a live Hugging Face Space with a Gemini-powered Q&A interface.
 
@@ -19,7 +19,7 @@ reviewable in a live Hugging Face Space with a Gemini-powered Q&A interface.
 |---|---|
 | **Intake** | Samples frames from any MP4 via OpenCV; letterboxes to model input size |
 | **Detection** | YOLO11n detects persons and vehicles; ByteTrack assigns persistent track IDs |
-| **PPE adjudication** | Gemini Vision assesses helmet and vest state per crop (per-run SHA-256 cache, 429 retry, fail-fast on daily quota) |
+| **PPE assessment** | EfficientNet-B0 two-head classifier (helmet / vest / unknown) with per-track temporal smoothing; Gemini Vision reviews crops >= 160 px and overrides the classifier there (per-run SHA-256 cache, 429 retry, fail-fast on daily quota). Gemini-only when no weights are present |
 | **Rule engine** | R1–R5 hazard rules evaluated against real tracks; debounce and severity thresholds |
 | **Regulation RAG** | 27-clause BOCW Central Rules corpus in Supabase; hybrid BM25 + Gemini-embedding-001 (768-dim) retrieval via Reciprocal Rank Fusion + MMR deduplication |
 | **Grounded briefings** | Deterministic template grounded to retrieved clauses; ungrounded sentences refused |
@@ -33,7 +33,7 @@ reviewable in a live Hugging Face Space with a Gemini-powered Q&A interface.
 
 | Rule | Description |
 |---|---|
-| R1 | Apparent missing helmet (30-frame debounce, YOLO + Gemini Vision) |
+| R1 | Apparent missing helmet (30-frame debounce, YOLO + PPE classifier + Gemini Vision) |
 | R2 | Apparent missing hi-vis vest near machinery or traffic |
 | R3 | Restricted-zone intrusion |
 | R4 | Approximate machinery proximity |
@@ -53,22 +53,25 @@ cloud/
   supabase.py     REST client (select / upsert / upload / signed URLs)
   schema.sql      Supabase DDL (runs, incidents, briefings, clause_chunks, chat_messages)
 jobs/
-  pipeline_job.py FakePipelineJob (fixtures) + RealPipelineJob (YOLO + ByteTrack + Gemini)
+  pipeline_job.py FakePipelineJob (fixtures) + RealPipelineJob (YOLO + PPE + Gemini)
 llm/
   regulations.py  27-clause BOCW corpus (local bootstrap + Supabase sync)
   embeddings.py   Gemini embedding-001 REST wrapper + RRF fusion
   embedding_cache.py  lazy Supabase embedding singleton (thread-safe)
   retrieval.py    BM25 + dense retrieval + MMR reranking + briefing builder
   qa.py           Gemini RAG Q&A with grounding post-pass
-  adjudicator.py  Gemini Vision PPE crop assessor
+  adjudicator.py  Gemini Vision PPE crop assessor (reviewer in hybrid mode)
 pipeline/
   intake/         FrameSampler — OpenCV frame extraction + letterboxing
-  vision/         Stage1Detector — YOLO11n + ByteTrack
+  vision/         Stage1Detector — YOLO11n + ByteTrack; ppe_model / ppe_temporal / ppe_stage
+                  two-head PPE classifier, temporal filter, per-frame PPE stage
+  data/           PPE person-crop labelling from YOLO-format PPE datasets
   rules/engine.py evaluate_real_rules() (R1+R2) and evaluate_fake_rules()
+  render/         render_twin_video() — side-by-side annotated feed + top-down map
   report/         build_report_html() — self-contained styled HTML report
 shared/           enums, config, coordinates, pydantic schemas
 evaluation/       demo inventory schema + CLI scaffold
-tools/            dataset fetching and CCTV clip utilities
+tools/            dataset fetching, CCTV clip utilities, PPE crop builder and trainer
 ```
 
 ---
@@ -120,8 +123,11 @@ most `ppe.maximum_gemini_verifications` calls), and a definite Gemini answer rep
 classifier verdict around that frame. Small workers rely on the classifier, where Gemini
 guesses; large ones rely on Gemini, because the classifier is trained on other footage and
 on the yard clip reads a red-and-blue striped sweater as a hi-vis vest. Without the
-weights, or without torch, the pipeline falls back to Gemini-only PPE. Build the weights once from the Ultralytics Construction-PPE dataset in
-`data/external/ultralytics-ppe/`:
+weights, or without torch, the pipeline falls back to Gemini-only PPE.
+
+Build the weights once from the Ultralytics Construction-PPE dataset in
+`data/external/ultralytics-ppe/` (the trainer writes `metrics.json` with per-class
+precision/recall, macro-F1 and calibration error, also at degraded 96/64/48 px):
 
 ```bash
 uv run --extra vision python tools/build_ppe_crops.py data/external/ultralytics-ppe
@@ -133,7 +139,8 @@ uv run --extra vision python tools/train_ppe.py --epochs 40   # ~30 min on Apple
 and per model; check the current numbers in AI Studio. Person crops shorter than
 `ppe.gemini_minimum_crop_height_px` (160) are not sent to Gemini, because at that size
 models guess a violation instead of answering `unknown`. When the quota is exhausted the
-run still completes: in hybrid mode the classifier verdict is kept; in Gemini-only mode R1/R2 report
+run still completes: in hybrid mode the classifier verdict is kept; in Gemini-only mode
+R1/R2 report
 `inconclusive (no_ppe_evidence)`, `gemini_status` is `failed`, and the manifest and report
 carry a warning. Q&A falls back to deterministic answers (trace starts with
 `gemini_qa_failed`) that quote the retrieved BOCW clauses.

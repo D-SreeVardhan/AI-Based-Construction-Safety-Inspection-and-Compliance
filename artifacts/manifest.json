@@ -11,9 +11,10 @@
     {
       "name": "ppe",
       "type": "local_checkpoint",
-      "sha256": null,
+      "sha256": "0e32a5bc72cce2c40034783e28e7a533131a10423cc6d9a87860359e31c2de2b",
       "destination": "artifacts/models/ppe/best.pt",
-      "required_for": ["runtime"]
+      "built_by": "tools/train_ppe.py --epochs 40 (effb0-v1)",
+      "required_for": ["hybrid_ppe"]
     },
     {
       "name": "pose",

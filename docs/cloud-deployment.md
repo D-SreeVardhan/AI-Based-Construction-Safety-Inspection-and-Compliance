@@ -15,7 +15,7 @@ time.
 |---|---|---|
 | Supabase | Postgres, `pgvector`, Storage bucket | stores runs, incidents, clause chunks, briefings, chat messages, and media |
 | Hugging Face Spaces | public Gradio demo | hosts `cloud/space_app.py` as `app.py` |
-| Google AI Studio | optional Gemini API key | reserved for future multimodal adjudication |
+| Google AI Studio | Gemini API key | PPE review of large crops, clause embeddings, and Space Q&A; without it runs use the fixture pipeline and Q&A falls back to deterministic answers |
 | Langfuse | optional tracing | reserved for future LLM observability |
 
 ## Environment
