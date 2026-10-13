@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from pipeline.geometry.context import GeometryContext
+from pipeline.rules.edge_rules import evaluate_r5
+from pipeline.rules.proximity_rules import evaluate_r4
 from pipeline.rules.windows import longest_window
 from pipeline.rules.zone_rules import evaluate_r3
 from shared.config import RulesConfig
@@ -191,6 +194,7 @@ def evaluate_real_rules(
     catalogue_sha256: str,
     config: RulesConfig,
     scene: SceneModel | None = None,
+    geometry: GeometryContext | None = None,
 ) -> tuple[tuple[RuleCoverageEntry, ...], tuple[IncidentRecord, ...], tuple[RuleResult, ...]]:
     """Evaluate R1–R5 against real tracks.
 
@@ -199,7 +203,8 @@ def evaluate_real_rules(
     R2  Missing hi-vis near machinery — fires when NO_VEST coincides with a
         vehicle track within the proximity bands.
     R3  Restricted-zone intrusion — worker anchor inside a scene-bootstrap zone.
-    R4–R5  Unsupported until the relative-plane mapping layer is implemented.
+    R4  Worker within the near band of active machinery, in Worker-Heights.
+    R5  Worker near a visibly unguarded open edge, in Worker-Heights.
 
     Returns the same ``(coverage, incidents, results)`` triple as
     ``evaluate_fake_rules``.
@@ -337,21 +342,35 @@ def evaluate_real_rules(
         debounce_s=config.r3_debounce_seconds,
     )
 
-    all_incidents = (*r1_incidents, *r2_incidents, *r3_incidents)
+    vehicle_tracks: dict[str, list[Pass1TrackObservation]] = {}
+    for obs in vehicle_obs:
+        vehicle_tracks.setdefault(obs.canonical_track_id, []).append(obs)
+    r4_incidents, r4_coverage = evaluate_r4(
+        run_id=run_id,
+        shot_id=shot_id,
+        catalogue_sha256=catalogue_sha256,
+        context=geometry,
+        person_tracks=person_tracks,
+        vehicle_tracks=vehicle_tracks,
+        config=config,
+    )
+    r5_incidents, r5_coverage = evaluate_r5(
+        run_id=run_id,
+        shot_id=shot_id,
+        catalogue_sha256=catalogue_sha256,
+        context=geometry,
+        scene=scene,
+        person_tracks=person_tracks,
+        config=config,
+    )
+
+    all_incidents = (*r1_incidents, *r2_incidents, *r3_incidents, *r4_incidents, *r5_incidents)
     coverage = (
         RuleCoverageEntry(rule_id=RuleId.R1, status=r1_status, reason_code=r1_reason),
         RuleCoverageEntry(rule_id=RuleId.R2, status=r2_status, reason_code=r2_reason),
         r3_coverage,
-        RuleCoverageEntry(
-            rule_id=RuleId.R4,
-            status=RuleStatus.INCONCLUSIVE,
-            reason_code="no_relative_plane_mapping",
-        ),
-        RuleCoverageEntry(
-            rule_id=RuleId.R5,
-            status=RuleStatus.UNSUPPORTED,
-            reason_code="no_edge_geometry",
-        ),
+        r4_coverage,
+        r5_coverage,
     )
     results = tuple(
         RuleResult(

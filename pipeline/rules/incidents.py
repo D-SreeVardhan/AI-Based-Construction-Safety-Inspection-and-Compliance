@@ -33,6 +33,8 @@ def make_incident(
     incident_id = (
         f"{run_id}-{safe_id}-{rule_id.value}-{first.video_time_s:.1f}-{last.video_time_s:.1f}"
     )
+    if object_id:
+        incident_id += "-" + object_id.replace("/", "-").replace(" ", "_")
     return IncidentRecord(
         incident_id=incident_id,
         run_id=run_id,

@@ -213,7 +213,7 @@ def test_unknown_ppe_everywhere_is_inconclusive_not_clear() -> None:
         assert by_rule[rule].reason_code == "no_ppe_evidence"
 
 
-def test_r3_needs_scene_and_r5_is_unsupported() -> None:
+def test_r3_r5_need_scene_and_r4_needs_machinery() -> None:
     coverage, _, _ = evaluate_real_rules(
         run_id="test-run",
         shot_id="s0",
@@ -222,7 +222,11 @@ def test_r3_needs_scene_and_r5_is_unsupported() -> None:
         config=CONFIG,
     )
     r3 = next(c for c in coverage if c.rule_id == RuleId.R3)
+    r4 = next(c for c in coverage if c.rule_id == RuleId.R4)
     r5 = next(c for c in coverage if c.rule_id == RuleId.R5)
     assert r3.status == RuleStatus.INCONCLUSIVE
     assert r3.reason_code == "restricted_zone_scene_state_unavailable"
-    assert r5.status == RuleStatus.UNSUPPORTED
+    assert r4.status == RuleStatus.NOT_APPLICABLE
+    assert r4.reason_code == "no_machinery_tracks"
+    assert r5.status == RuleStatus.INCONCLUSIVE
+    assert r5.reason_code == "scene_state_unavailable"

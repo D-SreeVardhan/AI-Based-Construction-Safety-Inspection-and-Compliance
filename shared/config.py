@@ -58,6 +58,7 @@ class PoseConfig(StrictModel):
     confidence_floor: float
     sample_spacing_seconds: float
     maximum_samples_per_track: int
+    maximum_total_samples: int
 
 
 class RelativePlaneConfig(StrictModel):
@@ -70,6 +71,18 @@ class RelativePlaneConfig(StrictModel):
     minimum_vertical_inlier_ratio: float
     maximum_reprojection_rms_px: float
     maximum_temporal_horizon_shift_px: float
+    minimum_focal_width_ratio: float
+    maximum_focal_width_ratio: float
+    maximum_condition_number: float
+    # A pair is an inlier when its head residual is within this many sigmas.
+    inlier_sigma: float
+    # Head/foot keypoint noise as a fraction of the worker's pixel height.
+    head_sigma_fraction: float
+    foot_sigma_fraction: float
+    support_expansion_wh: float
+    # Largest translation of the background across sampled frames before the feed is
+    # treated as moving, in reference pixels.
+    maximum_camera_shift_px: float
 
 
 class UncertaintyConfig(StrictModel):
@@ -107,6 +120,13 @@ class RulesConfig(StrictModel):
     r4_near_max_wh: float
     r4_caution_max_wh: float
     r5_edge_max_wh: float
+    # Project-defined contact-footprint margin around machinery, in Worker-Heights.
+    r4_vehicle_inflation_wh: float
+    r4_state_window_seconds: float
+    r4_active_speed_wh_s: float
+    r4_active_displacement_wh: float
+    # Pairs farther than this by point estimate are clear without a bootstrap.
+    r4_candidate_max_wh: float
 
 
 class RenderConfig(StrictModel):

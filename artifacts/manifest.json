@@ -20,7 +20,7 @@
       "name": "pose",
       "type": "ultralytics_asset",
       "asset_id": "yolo26n-pose.pt",
-      "sha256": null,
+      "sha256": "eb3bb8268828aeaf515cec23a4bfafd793944a86fe9af94ba7823609c14522a9",
       "destination": "artifacts/models/pose/yolo26n-pose.pt",
       "required_for": ["relative_plane"]
     }

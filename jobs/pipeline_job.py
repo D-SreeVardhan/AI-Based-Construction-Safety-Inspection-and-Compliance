@@ -17,6 +17,7 @@ import cv2
 from llm.adjudicator import GeminiPPEAdjudicator
 from llm.regulations import CATALOGUE_SHA256
 from llm.retrieval import RETRIEVAL_MODE, build_grounded_briefing
+from pipeline.geometry import build_geometry
 from pipeline.intake import FrameSampler
 from pipeline.render import render_twin_video
 from pipeline.report import build_report_html
@@ -37,6 +38,7 @@ from shared.enums import (
     ProcessingStatus,
     VestState,
 )
+from shared.schemas.geometry import GeometryModel
 from shared.schemas.jobs import JobRecord
 from shared.schemas.run import InputVideoMeta, PassTiming, RunManifest
 from shared.schemas.scene import SceneModel
@@ -93,6 +95,15 @@ def _scene_warnings(scene: SceneModel) -> list[str]:
     if not scene.proposals:
         return ["Scene bootstrap found no zones or edges with enough keyframe agreement."]
     return []
+
+
+def _geometry_warnings(geometry: GeometryModel) -> list[str]:
+    if geometry.status == "ok":
+        return []
+    return [
+        f"Relative ground plane unavailable ({geometry.status_reason}); R4 and R5 distances "
+        "are not reported for this run."
+    ]
 
 
 def _crop_name(crop: PersonCrop) -> str:
@@ -641,6 +652,19 @@ class RealPipelineJob:
         self._write_json(self.run_dir / "scene.json", scene)
 
         job = job.model_copy(
+            update={"progress": 0.63, "message": "Fitting the relative ground plane"}
+        )
+        self._write_json(self.run_dir / "job.json", job)
+        geometry, geometry_context = build_geometry(
+            sampler=sampler,
+            observations=observations,
+            video_width=input_meta.width,
+            video_height=input_meta.height,
+            config=self.config,
+        )
+        self._write_json(self.run_dir / "geometry.json", geometry)
+
+        job = job.model_copy(
             update={"progress": 0.65, "message": "Evaluating R1–R5 against real tracks"}
         )
         self._write_json(self.run_dir / "job.json", job)
@@ -652,6 +676,7 @@ class RealPipelineJob:
             catalogue_sha256=CATALOGUE_SHA256,
             config=self.config.rules,
             scene=scene,
+            geometry=geometry_context,
         )
         briefings = tuple(build_grounded_briefing(incident) for incident in incidents)
 
@@ -689,6 +714,7 @@ class RealPipelineJob:
             "tracks": "tracks.jsonl",
             "run_manifest": "run_manifest.json",
             "scene": "scene.json",
+            "geometry": "geometry.json",
         }
         if ppe_stage is not None:
             artifacts["ppe_verification"] = "ppe_verification.json"
@@ -721,6 +747,7 @@ class RealPipelineJob:
             run_warnings.append("Input fingerprint is a head/tail sample, not a full-file SHA-256.")
         run_warnings.extend(ppe.warnings)
         run_warnings.extend(_scene_warnings(scene))
+        run_warnings.extend(_geometry_warnings(geometry))
 
         manifest = RunManifest(
             run_id=self.run_id,
@@ -733,6 +760,7 @@ class RealPipelineJob:
                 "stage1": str(self.config.stage1.model_path),
                 "ppe": ppe.model_id,
                 **({"scene": f"gemini-consensus/{scene.model_id}"} if scene.status == "ok" else {}),
+                **({"pose": geometry.pose_model_id} if geometry.pose_model_id else {}),
                 "rag": RETRIEVAL_MODE,
                 "briefing": "deterministic-grounded-briefing-v1",
             },
