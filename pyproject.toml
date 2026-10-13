@@ -30,6 +30,11 @@ report = [
 vision = [
     "ultralytics>=8.3,<9",
     "lap>=0.5.12",
+    "scipy>=1.11,<2",
+]
+# Narration experiment (LoRA via MLX); Apple silicon only.
+train = [
+  "mlx-lm>=0.28,<1",
 ]
 
 [dependency-groups]
