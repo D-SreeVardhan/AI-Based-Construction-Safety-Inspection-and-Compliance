@@ -153,7 +153,7 @@ def build() -> Path:
     box(ax, 45.5, 40, 21, 11, "Grounding check", "trigram overlap, no model")
 
     box(ax, 84.5, 50, 25, 14, "Postgres + pgvector", "runs · incidents · clauses")
-    box(ax, 84.5, 20, 25, 12, "Supabase Storage", "private bucket · video · report")
+    box(ax, 84.5, 20, 25, 12, "Supabase Storage", "private bucket · video · report · crops")
 
     box(ax, 45.5, 90, 30, 11, "Gemini API", "PPE crops · scene · embeddings · answers")
 
@@ -164,7 +164,7 @@ def build() -> Path:
     arrow(ax, (56, 59), (72, 54), "2  run + clauses", (64, 59.6))
     arrow(ax, (45.5, 63.5), (45.5, 84.5), "3  embed + answer", (45.5, 75.0))
     arrow(ax, (45.5, 51.5), (45.5, 46), "4  check", (45.5, 48.7))
-    arrow(ax, (35, 54.5), (25, 54.5), "5  answer + video", (30, 51.9))
+    arrow(ax, (35, 54.5), (25, 54.5), "5  answer + media", (30, 51.9))
     arrow(ax, (56, 53), (72, 25), "S  sign media URL", (64, 40))
 
     arrow(ax, (24, 14), (72, 45), "A  publish rows", (40, 24), rad=-0.12)

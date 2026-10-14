@@ -321,8 +321,9 @@ def section_1(d) -> None:
             ["Faculty mentor", ""],
             [
                 "Primary course module",
-                "2 Agents (primary). Also draws on 1 LLM foundations, "
-                "3 Multimodal, and 5 Advanced apps & benchmarking.",
+                "3 Multimodal (primary): Gemini vision reviews worker crops and proposes zones "
+                "from keyframes. Also draws on 5 Advanced apps & benchmarking and 1 LLM "
+                "foundations.",
             ],
             ["Version / date", "v1.1, 14-10-2026 (as-built revision of v1.0, 25-09-2026)"],
         ],
@@ -717,8 +718,9 @@ def section_5(d) -> None:
             "or source overlap between splits.",
             "Personal or sensitive data — no accounts exist, so no names or emails are stored. "
             "The database holds incident records, briefings and Q&A history; Storage holds the "
-            "twin video and HTML report. Crops and keyframes sent to the free Gemini tier "
-            "may be used by Google to improve its products.",
+            "twin video, HTML report, evidence crops and reviewed PPE crops. Crops and "
+            "keyframes sent to the free Gemini tier may be used by Google to improve its "
+            "products.",
         ],
     )
 
@@ -941,7 +943,8 @@ def section_8(d) -> None:
             [
                 "Local review (laptop)",
                 "Process a clip and publish it.",
-                "Drop zone, twin video, incident list, HTML report link, Publish to Space button.",
+                "Drop zone, twin video, incident list with evidence crops, HTML report link, "
+                "Publish to Space button.",
                 "FR-1, FR-2",
             ],
             [
@@ -953,8 +956,8 @@ def section_8(d) -> None:
             [
                 "Run detail (Space)",
                 "Review the run and its briefings.",
-                "Signed-URL video player, run summary with rule coverage, grounded briefings with "
-                "clause citations.",
+                "Signed-URL video player, run summary with rule coverage, incident cards with "
+                "evidence crops, reviewed-crop grid (classifier vs Gemini), cited briefings.",
                 "FR-1, FR-3",
             ],
             [
@@ -1113,9 +1116,10 @@ def section_10(d) -> None:
             "Grounding check — runs in the Space process, uses no model, and flags answers with "
             "little trigram overlap with their context.",
             "Supabase — Postgres holds runs, incidents, briefings and the law corpus with its "
-            "vectors; Storage holds the twin video and HTML report in a private bucket.",
-            "Signed URLs — the Space asks Storage for a 1-hour link per view, and the browser "
-            "streams the video from Supabase directly.",
+            "vectors; Storage holds the twin video, HTML report, evidence and PPE-review crops "
+            "and a media index in a private bucket.",
+            "Signed URLs — the Space asks Storage for 1-hour links per view, and the browser "
+            "streams the video and loads the crops from Supabase directly.",
             "Gemini — the only hosted model: PPE crop review and scene proposals from the laptop, "
             "clause embeddings and answers from the Space.",
         ],
@@ -1250,8 +1254,8 @@ def section_12(d) -> None:
                 "Database or storage quota reached, putting Postgres into read-only mode.",
                 "L",
                 "M",
-                "Only the twin video and HTML report are uploaded per run; old runs' media can be "
-                "deleted from the bucket while their incident rows are kept.",
+                "Per run only the video, report, one crop per incident and at most 48 reviewed "
+                "crops are uploaded; old runs' media can be deleted while incident rows stay.",
             ],
             [
                 "Detection quality on real site footage falls short of what the rules need.",
@@ -1370,7 +1374,8 @@ def section_16(d) -> None:
                 "v1.1",
                 "As-built architecture: Gradio Space (no FastAPI, sign-in or Langfuse); fixed Q&A "
                 "pipeline instead of an agent; deterministic L2 briefings; MJCSD-trained YOLO11n; "
-                "27-clause corpus; measured detector and narration results.",
+                "27-clause corpus; measured detector and narration results; evidence and "
+                "PPE-review crops published and shown; primary module set to 3 Multimodal.",
                 "Align the document with the delivered system",
             ],
         ],
