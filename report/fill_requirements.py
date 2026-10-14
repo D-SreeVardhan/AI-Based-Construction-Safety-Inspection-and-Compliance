@@ -284,7 +284,7 @@ def build() -> Path:
     title(document, "CS3235 Course Project — Requirements Document")
     subtitle_rule(
         document,
-        "AI-Based Construction Safety Inspection and Compliance  ·  v1.0  ·  25-09-2026",
+        "AI-Based Construction Safety Inspection and Compliance  ·  v1.1  ·  14-10-2026",
     )
 
     section_1(document)
@@ -321,10 +321,11 @@ def section_1(d) -> None:
             ["Faculty mentor", ""],
             [
                 "Primary course module",
-                "2 Agents (primary). Also draws on 1 LLM foundations, "
-                "3 Multimodal, and 5 Advanced apps & benchmarking.",
+                "3 Multimodal (primary): Gemini vision reviews worker crops and proposes zones "
+                "from keyframes. Also draws on 5 Advanced apps & benchmarking and 1 LLM "
+                "foundations.",
             ],
-            ["Version / date", "v1.0, 25-09-2026"],
+            ["Version / date", "v1.1, 14-10-2026 (as-built revision of v1.0, 25-09-2026)"],
         ],
         [1.0, 2.1],
     )
@@ -380,10 +381,11 @@ def section_2(d) -> None:
             "video beside a 2.5D plan view of the site.",
             "A published run containing incidents, evidence images, rule coverage and a web-sized "
             "video, uploaded to a cloud service at a public URL.",
-            "The five LLM layers on the cloud service: image adjudication, cited corrective-action "
-            "briefings, a question-answering agent, a fine-tuning experiment, and a guardrail over "
-            "every answer.",
-            "Google sign-in, so a user only sees runs they published.",
+            "Five LLM layers: image adjudication and scene proposals on the laptop, cited "
+            "corrective-action briefings, run-scoped question answering on the Space, a "
+            "fine-tuning experiment, and deterministic checks over every generated answer.",
+            "A public Hugging Face Space (Gradio) that lists published runs, plays the video, "
+            "shows briefings and answers questions.",
         ],
     )
     para(d, "Out of scope — deliberately not built this semester:", after=60)
@@ -393,7 +395,8 @@ def section_2(d) -> None:
             "Real-time live-feed monitoring; the pipeline processes pre-recorded clips only.",
             "Mobile application; desktop browser at 1280 px minimum width only.",
             "BIM import or 3D reconstruction; the plan view is 2.5D and approximate.",
-            "Role-based access control beyond per-user isolation.",
+            "User accounts and per-user isolation; the demo Space is public and read-only, and "
+            "only the developer's laptop can publish.",
             "A custom domain; the free provider subdomain is used instead.",
         ],
     )
@@ -423,7 +426,7 @@ def section_2(d) -> None:
     steps(
         d,
         [
-            "A safety officer signs in and opens the run for a clip processed that morning.",
+            "A safety officer opens the Space and picks the run for a clip processed that morning.",
             "An incident reads: “Worker 17 stayed within the machinery exclusion band for 4.3 s — "
             "high severity,” with the evidence image beside it and the note “helmet present, vest "
             "uncertain — upper body partly blocked from view.”",
@@ -488,8 +491,7 @@ def section_3(d) -> None:
             [
                 "FR-6",
                 "Answer a free-text question about a specific run with a grounded answer, a "
-                "visible "
-                "step-by-step tool trace, and cited evidence.",
+                "visible trace of the retrieval and guardrail steps taken, and cited evidence.",
                 "Should",
                 "25 scripted scenarios over 3 frozen runs; task-success rate ≥ 0.80.",
             ],
@@ -525,15 +527,16 @@ def section_4(d) -> None:
         [
             [
                 "L1",
-                "Explains unclear protective-equipment evidence in an image.",
+                "Reviews protective-equipment crops of 160 px and taller, and proposes restricted "
+                "zones and open edges from keyframes (one request per video, cached).",
                 "Gemini (vision)",
             ],
             [
                 "L2",
-                "Writes the corrective action and cites the law behind it.",
-                "Gemini + retrieval",
+                "Corrective-action briefing citing retrieved BOCW clauses.",
+                "Retrieval + deterministic template",
             ],
-            ["L3", "Answers free-text questions about a processed clip.", "Gemini (agent)"],
+            ["L3", "Answers free-text questions about a processed clip.", "Gemini + retrieval"],
             [
                 "L4",
                 "Narration experiment: a small fine-tuned model against a template.",
@@ -549,63 +552,68 @@ def section_4(d) -> None:
         [
             [
                 "Base model(s)",
-                "Gemini 2.5 Flash for L1–L3.\nQwen2.5-1.5B-Instruct-4bit + LoRA as the L4 "
-                "student.\nQwen2.5-7B-Instruct-4bit as the L4 teacher (offline only).",
-                "One multimodal model covers all three cloud layers on a free tier that needs no "
+                "gemini-3.5-flash-lite for L1 and L3 (one config key).\nQwen2.5-1.5B-Instruct-4bit "
+                "+ LoRA as the L4 student.\nQwen2.5-7B-Instruct-4bit as the L4 teacher (offline "
+                "only).",
+                "One multimodal model covers vision review and Q&A on a free tier that needs no "
                 "payment card. Qwen is Apache-2.0 and fits in 16 GB.",
             ],
             [
                 "Access method",
                 "Gemini: hosted HTTPS API via Google AI Studio.\nQwen: Apple MLX on the local M1 "
                 "Pro.",
-                "No GPU is rented. Training stays on the laptop; the cloud service stays CPU-only.",
+                "No GPU is rented. Training stays on the laptop; the Space runs no model of its "
+                "own.",
             ],
             [
                 "Prompting strategy",
-                "A fixed JSON schema on every call. Four worked examples for L2 and L4; zero-shot "
-                "with typed tools for L3.",
+                "A fixed JSON schema for L1 and L4, four worked examples for L4, and a context "
+                "block of incidents, rule coverage and retrieved clauses for L3.",
                 "A bad response breaks the schema, so it is caught automatically before the user "
                 "sees it.",
             ],
             [
                 "Retrieval (RAG)",
-                "Hybrid. Vector search with text-embedding-004 (768-d) in pgvector, plus Postgres "
-                "keyword search, merged and deduplicated to the top 8 passages. Chunks of 200–450 "
-                "tokens on sub-rule boundaries.",
+                "Hybrid. BM25 keyword scoring plus gemini-embedding-001 (768-d) vectors stored in "
+                "pgvector, merged by Reciprocal Rank Fusion (k=60) and diversified with MMR "
+                "(λ=0.6) to the top 4. Corpus: 27 BOCW Central Rules clauses, one chunk each.",
                 "Vector search matches “protective headgear” to “safety helmet”; keyword search "
                 "handles exact rule numbers. Each covers the other’s blind spot.",
             ],
             [
                 "Fine-tuning",
                 "LoRA on Qwen2.5-1.5B-Instruct-4bit. r=8, α=16, on the query and value projections "
-                "of the top 8 of 28 layers. 311,296 trainable parameters, 0.0202% of the model.",
-                "Tests whether adapting a small model to this domain reduces unsupported claims. "
-                "Calculation below.",
+                "of the top 8 of 28 layers. 311,296 trainable parameters, 0.0202% of the model, "
+                "asserted against MLX before training.",
+                "Tests whether adapting a small model reduces unsupported claims. Result: not "
+                "promoted (75% fully valid on the holdout vs 100% template), so the template "
+                "serves.",
             ],
             [
                 "Agents and tools",
-                "One agent with a ceiling of 6 steps and five tools: query incidents, track a "
-                "worker, look up a zone, search regulations, fetch an evidence frame.",
-                "Free-text questions cannot be built as fixed screens. The step ceiling bounds "
-                "cost, and the trace is shown in the UI.",
+                "No autonomous agent was built. L3 is a fixed pipeline: legal-verdict refusal, "
+                "hybrid retrieval, one Gemini call, grounding check, with each step recorded in a "
+                "trace shown under the answer.",
+                "A single run's incidents and coverage fit in one context block, so a fixed "
+                "pipeline answered the questions tried without the cost or failure modes of tool "
+                "loops.",
             ],
             [
                 "Protocols",
                 "Not used — no MCP or A2A.",
-                "Five local tools cover the question space for a single run. An external tool "
-                "server would add latency without adding graded capability.",
+                "L3 calls no tools, so a tool protocol has nothing to connect.",
             ],
             [
                 "Multimodal input",
-                "Yes. Evidence crops are sent to Gemini vision (L1), which returns whether "
-                "equipment is present, a confidence and a short visual reason.",
+                "Yes. Person crops of 160 px and taller go to Gemini vision (L1), which returns "
+                "helmet and vest states; 8–12 keyframes per video give zone and edge proposals.",
                 "The classifier only outputs fixed labels and returns “unknown” when a worker is "
                 "blocked from view. A vision model can describe what it sees.",
             ],
             [
                 "Alignment and safety",
-                "System prompt: answer only from the supplied context, refuse legal verdicts, "
-                "invent no number or name. The L5 guardrail then checks every answer.",
+                "System prompt: answer only from the supplied context. Legal-verdict questions are "
+                "refused before any model call. The L5 checks then run on every answer.",
                 "The model has no database permission to change an incident, so it cannot alter a "
                 "safety verdict. The guardrail makes its text safe to display.",
             ],
@@ -613,13 +621,16 @@ def section_4(d) -> None:
         [0.7, 2.0, 2.0],
     )
 
-    para(d, "What the L5 guardrail checks", after=60)
+    para(d, "What the L5 checks do", after=60)
     para(
         d,
-        "Eight automatic checks run on every generated answer: that it has the required shape, "
-        "that every number and name in it appears in the source data, that every citation "
-        "points to a real clause, and that it never states a legal verdict. If any check fails "
-        "the answer is discarded and the fixed template is shown instead.",
+        "Narration (L4) output passes a deterministic validator: required JSON shape and length, "
+        "no law citation, compliance verdict, rule id or severity, every number and track id "
+        "present in the request, no invented machinery, equipment, harm or weather, and the "
+        "action concept preserved. Any failure discards the output and the fixed template is "
+        "shown. Briefings (L2) keep only sentences whose words come from the incident or the "
+        "cited clause. Q&A answers (L3) are checked for trigram overlap with their context; "
+        "below 8% the answer carries a visible low-evidence warning.",
     )
 
     para(d, "LoRA trainable-parameter calculation (L4)", after=60)
@@ -653,35 +664,35 @@ def section_5(d) -> None:
         ["Dataset / source", "Purpose", "Size", "Format", "Licence", "Link"],
         [
             [
-                "Roboflow Construction Site Safety v27",
-                "YOLO26 detection fine-tune",
-                "2,801 images (2,605 / 114 / 82)",
-                "YOLO txt",
-                "CC BY 4.0",
-                "universe.roboflow.com",
+                "MJCSD (MaJia Construction Site Dataset)",
+                "YOLO11n detection fine-tune",
+                "10,000 CCTV frames, 5 cameras; used 3,200 / 1,555 / 1,505",
+                "JSON boxes → YOLO txt",
+                "AGPL-3.0",
+                "github.com/MaJia-Cons",
             ],
             [
-                "BOCW Act 1996 + Central Rules 1998",
-                "L2 retrieval corpus",
-                "64 sections, 11 chapters; 251 rules",
-                "PDF",
+                "BOCW Central Rules 1998",
+                "L2/L3 retrieval corpus",
+                "27 clauses relevant to R1–R5",
+                "Text in llm/regulations.py",
                 "Public domain (Indian statute)",
                 "indiacode.nic.in",
             ],
             [
-                "Project PPE crops",
+                "Ultralytics Construction-PPE",
                 "Two-head PPE classifier training",
-                "2,000 person crops, hand-audited",
-                "JPEG",
-                "Derived, owned by team",
-                "local",
+                "2,094 person crops (1,641 train)",
+                "YOLO txt → JPEG crops",
+                "AGPL-3.0",
+                "docs.ultralytics.com",
             ],
             [
-                "SteelBench",
-                "Held-out L1 adjudication evaluation",
-                "82 images",
-                "JPEG",
-                "CC BY-NC 4.0",
+                "Narration corpus",
+                "L4 teacher/student training and evaluation",
+                "400 / 60 / 80 generated + 40 author-written holdout",
+                "JSONL",
+                "Derived, owned by team",
                 "local",
             ],
             [
@@ -698,18 +709,18 @@ def section_5(d) -> None:
     bullets(
         d,
         [
-            "Preprocessing — the statute is split on its own chapter, section and sub-rule "
-            "boundaries into 200–450 token chunks. Each chunk stores its page and character span "
-            "so a citation can be traced back to the source PDF. Equipment crops are checked by "
-            "hand.",
-            "Train / test separation — whole clips go to either development or held-out evaluation "
-            "before any model is trained. The evaluation sets are written by hand and committed "
-            "before any tuning starts, so the split cannot be adjusted later to flatter the "
-            "results.",
-            "Personal or sensitive data — the database holds a sign-in ID, an email address and "
-            "incident data; no raw video frames. Monitoring receives timings and token counts "
-            "only, never prompt text. Images and prompts sent to the free Gemini tier may be used "
-            "by Google to improve its products, which the app discloses.",
+            "Preprocessing — each of the 27 clauses is one retrieval chunk with its rule number, "
+            "so a citation names the exact clause. MJCSD labels map to five detector classes "
+            "through config/class_map.yaml; unknown labels are rejected, not guessed.",
+            "Train / test separation — MJCSD is split by camera and day (seed 42017), so "
+            "consecutive frames never straddle splits; cameras are not held out. Narration "
+            "splits are frozen by seed before generation, with zero subject, condition, action "
+            "or source overlap between splits.",
+            "Personal or sensitive data — no accounts exist, so no names or emails are stored. "
+            "The database holds incident records, briefings and Q&A history; Storage holds the "
+            "twin video, HTML report, evidence crops and reviewed PPE crops. Crops and "
+            "keyframes sent to the free Gemini tier may be used by Google to improve its "
+            "products.",
         ],
     )
 
@@ -723,8 +734,8 @@ def section_6(d) -> None:
             [
                 "NFR-1",
                 "Latency",
-                "Question submitted to first streamed token.",
-                "≤ 8 s at p90, measured from POST to the first SSE token event.",
+                "Question submitted to answer shown on the Space.",
+                "≤ 8 s at p90 for a single Gemini call (answers are not streamed).",
             ],
             [
                 "NFR-2",
@@ -742,14 +753,16 @@ def section_6(d) -> None:
                 "NFR-4",
                 "Reliability",
                 "Behaviour when the model API is unavailable or rate-limited.",
-                "One retry after 2–4 s jittered back-off, then the deterministic template with an "
-                "inline note. Responses cached by content hash.",
+                "Retry on HTTP 429, fail fast on an exhausted daily quota, then deterministic "
+                "answers quoting the retrieved clauses. PPE verdicts are cached per crop hash and "
+                "scene proposals per video.",
             ],
             [
                 "NFR-5",
                 "Hallucination control",
-                "Generated sentences with no supporting n-gram or entity in the evidence.",
-                "≤ 5% of sentences in production logs, counted by guardrail check 7.",
+                "Generated answers with little n-gram support in the evidence.",
+                "Every Q&A answer below 8% trigram overlap is flagged in the UI; narration "
+                "unsupported-claim rate ≤ 2% for promotion.",
             ],
             [
                 "NFR-6",
@@ -761,8 +774,9 @@ def section_6(d) -> None:
                 "NFR-7",
                 "Privacy",
                 "What user data is logged or sent to third parties.",
-                "Hashes only to Langfuse; crops and prompts to Gemini; uid and email in Supabase. "
-                "No sensitive data is stored in submitted project files.",
+                "No accounts or emails stored; crops, keyframes and prompts go to Gemini; no "
+                "tracing service is used. Media stays in a private bucket behind 1-hour signed "
+                "links. No secrets in submitted files.",
             ],
             [
                 "NFR-8",
@@ -783,10 +797,10 @@ def section_7(d) -> None:
         [
             [
                 "Detection mAP@50",
-                "Detector quality on unseen site images.",
-                "Roboflow held-out test split, 82 images.",
-                "Pretrained, no fine-tune",
-                "Beats pretrained on both mAP@50 and mAP@50-95",
+                "Detector quality on unseen camera-days.",
+                "MJCSD test split, 1,505 frames; person and merged machinery AP50.",
+                "Pretrained COCO YOLO11n",
+                "Beats pretrained. Measured: person 0.671 → 0.871, machinery 0.129 → 0.867",
                 "FR-1",
             ],
             [
@@ -830,17 +844,17 @@ def section_7(d) -> None:
                 "FR-4, NFR-6",
             ],
             [
-                "Agent task success",
-                "Does the agent pick sensible tools and answer the question?",
+                "Q&A task success",
+                "Does the run-scoped Q&A answer the question from the run's evidence?",
                 "25 scripted scenarios over 3 frozen runs.",
-                "No agent (0%)",
+                "Deterministic answers",
                 "≥ 0.80",
                 "FR-6",
             ],
             [
                 "Guardrail catch rate",
                 "Does the guardrail stop corrupted output reaching the UI?",
-                "60 corruption fixtures covering all 8 checks.",
+                "Unit-test corruption fixtures: schema, citation, verdict, numbers, track ids.",
                 "Guardrail disabled",
                 "100% caught",
                 "FR-7",
@@ -848,9 +862,9 @@ def section_7(d) -> None:
             [
                 "Narration quality",
                 "Does LoRA cut unsupported claims against the base model?",
-                "Four arms on 300 auto examples and a 120-example blind holdout.",
+                "Five arms on 80 generated test and 40 author-written holdout examples.",
                 "Template",
-                "Schema 100%, unsupported ≤ 2%",
+                "Schema 100%, unsupported ≤ 2%. Measured: 100% / 17.5%, not promoted",
                 "FR-8",
             ],
             [
@@ -867,8 +881,10 @@ def section_7(d) -> None:
     bullets(
         d,
         [
-            "Test sets — 120 clause-retrieval pairs, 200 held-out equipment crops, 25 agent "
-            "scenarios, 120 narrations and 35 red-team prompts, all authored by the team.",
+            "Test sets — 120 clause-retrieval pairs, 200 held-out equipment crops, 25 Q&A "
+            "scenarios and 35 red-team prompts are planned, team-authored. Measured so far: "
+            "detector (MJCSD test), PPE classifier (190/198 test crops, macro-F1 0.93) and "
+            "narration (120 examples); results in evaluation/results/.",
             "Standard benchmarks — none exists for this domain, so retrieval follows the BEIR "
             "method, narration uses blind human rating, and detection uses the dataset’s own test "
             "split.",
@@ -887,34 +903,34 @@ def section_8(d) -> None:
         [
             [
                 "Framework",
-                "Vanilla JavaScript Web Components, no build step, served by FastAPI StaticFiles "
-                "from the same container and origin. Server-Sent Events for streaming.",
+                "Public review UI: Gradio Blocks on the Hugging Face Space. Local review UI: "
+                "plain HTML and JavaScript served by a Python standard-library HTTP server on "
+                "127.0.0.1:8765, with drag-and-drop processing and a Publish button.",
             ],
             [
                 "Styling",
-                "Plain CSS with design tokens. Warm neutral palette, custom type scale, no "
-                "external "
-                "component library.",
+                "Gradio's default theme on the Space; plain CSS with a warm neutral palette in "
+                "the local UI. No external component library.",
             ],
             ["Target devices", "Desktop browser, minimum viewport width 1280 px."],
             [
                 "Response display",
-                "Tokens stream over a persistent SSE connection with a typing indicator; tool-call "
-                "events render above the answer as each agent step completes.",
+                "The answer appears as one Markdown block once Gemini returns, with any "
+                "low-evidence warning and the step trace below it. Cited clause and incident ids "
+                "are stored with the answer in chat_messages.",
             ],
             [
                 "Error and empty states",
-                "Model unavailable: “briefing unavailable” with a retry button. Service "
-                "waking from sleep: progress bar with auto-retry after 30 s. Quota exhausted: "
-                "deterministic template with an explicit note.",
+                "No runs: an explicit empty message. Gemini unavailable or out of quota: a "
+                "deterministic answer quoting the retrieved clauses, with the failure in its "
+                "trace. Missing media: the video panel says so.",
             ],
             [
                 "Accessibility",
-                "Full keyboard navigation, visible focus rings, WCAG AA contrast, alt text on "
-                "every "
-                "evidence crop, no meaning carried by colour alone.",
+                "Gradio's built-in keyboard support and labelled controls; incident status is "
+                "written as text, not carried by colour alone.",
             ],
-            ["Wireframes", "Excalidraw, added to docs/wireframes/ in Week 2."],
+            ["Wireframes", "Not produced; the Gradio layout replaced the planned custom UI."],
         ],
         [0.8, 3.0],
     )
@@ -925,30 +941,30 @@ def section_8(d) -> None:
         ["Screen", "Purpose", "Key UI elements", "Req."],
         [
             [
-                "Sign-in",
-                "Authenticate and establish per-user run isolation.",
-                "Google sign-in button; redirect to Runs list; waking-service fallback.",
-                "FR-4",
+                "Local review (laptop)",
+                "Process a clip and publish it.",
+                "Drop zone, twin video, incident list with evidence crops, HTML report link, "
+                "Publish to Space button.",
+                "FR-1, FR-2",
             ],
             [
-                "Runs list",
-                "Browse published runs and start a new one.",
-                "Run cards with clip label, duration, incident count and rule-coverage chips; "
-                "empty state with onboarding copy.",
+                "Runs (Space)",
+                "Pick a published run.",
+                "Refresh button, run dropdown, run list with clip name, status and date.",
                 "FR-2",
             ],
             [
-                "Run detail",
-                "Review every incident with its adjudication and briefing.",
-                "720p player, incident timeline, per-incident card showing rule verdict, L1 "
-                "adjudication and L2 briefing with expandable clauses.",
-                "FR-1, FR-3, FR-5",
+                "Run detail (Space)",
+                "Review the run and its briefings.",
+                "Signed-URL video player, run summary with rule coverage, incident cards with "
+                "evidence crops, reviewed-crop grid (classifier vs Gemini), cited briefings.",
+                "FR-1, FR-3",
             ],
             [
-                "Ask",
+                "Ask (Space)",
                 "Query the loaded run in plain English.",
-                "Message list, input box, streamed answer, tool-call trace, inline evidence links, "
-                "refusal card for out-of-scope questions.",
+                "Question box, answer with step trace and low-evidence warning, refusal text for "
+                "legal-verdict questions.",
                 "FR-6, FR-4",
             ],
         ],
@@ -959,12 +975,11 @@ def section_8(d) -> None:
     steps(
         d,
         [
-            "Sign in at the public URL and pick a run from the list.",
-            "Run detail opens with the video, an incident timeline and one card per incident.",
-            "Expanding a card shows the rule verdict, the image adjudication and the briefing; "
-            "clicking a citation opens the clause text.",
-            "The Ask tab takes a question in plain English and streams back the answer with the "
-            "steps it took. Out-of-scope questions get a refusal card.",
+            "Open the public Space URL and pick a run from the dropdown.",
+            "The run opens with the twin video, its rule coverage and the grounded briefings.",
+            "Each briefing sentence names the BOCW clause it rests on.",
+            "The Ask box takes a question in plain English and returns the answer with the steps "
+            "it took. Legal-verdict questions are refused.",
         ],
     )
     caption(
@@ -983,82 +998,87 @@ def section_9(d) -> None:
             ["Language", "Python", "3.11.9"],
             [
                 "Web framework",
-                "FastAPI, also serving the web app so the browser and API share one origin.",
-                "0.115",
+                "Gradio Blocks on the Space. The local review app uses the Python standard-library "
+                "ThreadingHTTPServer, bound to 127.0.0.1 only.",
+                "Gradio (Space SDK)",
             ],
             [
                 "LLM orchestration",
-                "LangGraph for the L3 agent. Retrieval is direct SQL, with no chain framework.",
-                "latest stable",
+                "None. Retrieval, prompting and checks are plain Python in llm/; Supabase is "
+                "called through its REST API with no chain framework.",
+                "—",
             ],
             [
                 "Model serving",
-                "Gemini 2.5 Flash and text-embedding-004 over the hosted API. Qwen runs locally "
-                "for L4 only and is never deployed.",
-                "google-genai ≥ 1.0",
+                "Gemini (gemini-3.5-flash-lite) and gemini-embedding-001 over the hosted REST "
+                "API. Qwen runs locally under MLX for L4 only and is never deployed.",
+                "mlx-lm ≥ 0.28",
             ],
             [
                 "Relational DB",
-                "Supabase Postgres with Row Level Security on every user-scoped table.",
+                "Supabase Postgres: runs, incidents, briefings, clause_chunks, chat_messages. Row "
+                "Level Security on, with public read policies for the demo; writes need the "
+                "service-role key.",
                 "Postgres 15",
             ],
             [
                 "Vector DB",
-                "pgvector on the same Postgres instance, 768-d vectors. Keyword search uses "
-                "Postgres full-text search.",
-                "pgvector 0.7",
+                "pgvector on the same Postgres instance, 768-d clause vectors. Keyword scoring "
+                "(BM25) runs in Python over the 27-clause corpus.",
+                "pgvector",
             ],
             [
                 "Cache / queue",
-                "No external queue. Answers are cached by prompt hash; ingest jobs use a table in "
-                "Postgres with one worker thread.",
+                "No queue: processing runs on the laptop, one job at a time. Gemini PPE verdicts "
+                "and scene proposals are cached on disk by content hash.",
                 "—",
             ],
             [
                 "Object storage",
-                "Supabase Storage, private 1 GB bucket, served through 15-minute signed links.",
+                "Supabase Storage, private run-media bucket, served through 1-hour signed links "
+                "minted per view.",
                 "—",
             ],
             [
                 "Authentication",
-                "Supabase Auth with Google sign-in. The token is verified on every request, and "
-                "the user ID scopes every database read and write.",
+                "None for viewers: the demo is public and read-only. Publishing needs the "
+                "service-role key, which only the developer's .env and the Space secrets hold.",
                 "—",
             ],
             [
                 "Secrets management",
-                "Secrets live in Hugging Face Space settings; submitted project files contain key "
-                "names only. No secret reaches the browser.",
+                "Local .env (gitignored) and Hugging Face Space secrets; submitted files contain "
+                "key names only. No secret reaches the browser.",
                 "—",
             ],
         ],
         [0.75, 2.6, 0.65],
     )
 
-    para(d, "API endpoints", after=60)
+    para(d, "Interfaces", after=60)
     table(
         d,
-        ["Method", "Endpoint", "Purpose", "Request → Response", "Auth"],
+        ["Where", "Interface", "Purpose", "Request → Response", "Auth"],
         [
             [
-                "POST",
-                "/api/runs/publish",
-                "Upload a processed run and make it available in the web app.",
-                "run bundle → run summary",
-                "Yes",
+                "Laptop",
+                "safety-twin process <clip>",
+                "Run the full pipeline on a clip.",
+                "video → output/<run_id>/ bundle",
+                "Local",
             ],
             [
-                "POST",
-                "/api/runs/{run_id}/ask",
-                "Ask a question about one run and receive a grounded answer.",
-                "question → streamed answer with evidence links",
-                "Yes",
+                "Laptop",
+                "safety-twin publish <run_dir>",
+                "Upload a run's rows and media to Supabase.",
+                "bundle → rows + storage objects",
+                "Service key",
             ],
             [
-                "GET",
-                "/api/status",
-                "Show whether the demo service, database and corpus are ready.",
-                "→ readiness status",
+                "Space",
+                "Gradio event handlers",
+                "List runs, load one, ask a question.",
+                "run id / question → Markdown + video",
                 "No",
             ],
         ],
@@ -1068,9 +1088,9 @@ def section_9(d) -> None:
     para(d, "Database schema", after=60)
     para(
         d,
-        "The database stores users, runs, incidents, evidence, rule coverage, retrieved law "
-        "clauses, generated briefings and background jobs. User-owned data is isolated per "
-        "account; the law corpus is shared read-only data.",
+        "cloud/schema.sql creates five tables: runs (with the run manifest), incidents, "
+        "briefings, clause_chunks (27 clauses with their vectors) and chat_messages. There are "
+        "no user tables; the law corpus is shared read-only data.",
     )
 
 
@@ -1079,26 +1099,29 @@ def section_10(d) -> None:
     picture(d, DIAGRAM, 6.25)
     caption(
         d,
-        "Arrows 1–6 trace one Ask request. Arrows A–C are the separate offline publish path, run "
-        "once per clip.",
+        "Arrows 1–5 trace one Ask request; S is the signed media link for the video. Arrows A–B "
+        "are the publish path from the laptop, run once per clip.",
     )
     para(d, "Component description", after=60)
     bullets(
         d,
         [
-            "Video processing — detection, tracking and rules R1–R5 run offline on the laptop. No "
-            "GPU is ever rented and footage never leaves the machine.",
-            "FastAPI service — one container serving the API, the answer stream and the web app, "
-            "so everything sits on a single origin.",
-            "Grounding guardrail — runs in the same process, uses no model, and checks every "
-            "generated answer.",
-            "Ingest worker — drains a background queue, so publishing a run does not block a web "
-            "request.",
-            "Supabase — Postgres holds incidents and the searchable law corpus, Storage holds "
-            "images and video, Auth handles sign-in.",
-            "Signed URLs — the API mints a short-lived link locally, and the browser loads the "
-            "image itself.",
-            "Gemini 2.5 Flash — the only hosted model, used for L1, L2 and L3.",
+            "Video pipeline — detection (YOLO11n fine-tuned on MJCSD), tracking, PPE, scene and "
+            "geometry, rules R1–R5 and rendering run on the laptop. No GPU is rented, and only "
+            "person crops and keyframes leave the machine, for Gemini review.",
+            "Local review app — processes a dropped clip and publishes the finished run to "
+            "Supabase directly with the service-role key.",
+            "Space app — a Gradio app on Hugging Face (ZeroGPU hardware, but it runs no model). "
+            "It reads runs from Postgres and calls Gemini for embeddings and answers.",
+            "Grounding check — runs in the Space process, uses no model, and flags answers with "
+            "little trigram overlap with their context.",
+            "Supabase — Postgres holds runs, incidents, briefings and the law corpus with its "
+            "vectors; Storage holds the twin video, HTML report, evidence and PPE-review crops "
+            "and a media index in a private bucket.",
+            "Signed URLs — the Space asks Storage for 1-hour links per view, and the browser "
+            "streams the video and loads the crops from Supabase directly.",
+            "Gemini — the only hosted model: PPE crop review and scene proposals from the laptop, "
+            "clause embeddings and answers from the Space.",
         ],
     )
 
@@ -1111,8 +1134,8 @@ def section_11(d) -> None:
         [
             [
                 "Cloud provider",
-                "Hugging Face Spaces for compute, Supabase for data and auth, Google AI Studio for "
-                "models. All free tier.",
+                "Hugging Face Spaces for the public UI, Supabase for data and media, Google AI "
+                "Studio for models. All free tier.",
             ],
             [
                 "Free tier / credits",
@@ -1120,33 +1143,37 @@ def section_11(d) -> None:
             ],
             [
                 "Frontend hosting",
-                "Served by the same FastAPI container as the API, on the same origin.",
+                "The Gradio app is the frontend and backend in one Space process.",
             ],
             [
                 "Backend hosting",
-                "Hugging Face Space, Docker, CPU Basic (2 vCPU, 16 GB). Sleeps after 48 h idle.",
+                "Hugging Face Space, Gradio SDK, Python 3.11, ZeroGPU hardware (used only by a "
+                "health-check callback). Sleeps when idle.",
             ],
             [
                 "LLM hosting",
-                "Gemini 2.5 Flash on the free tier: 10 requests a minute, 250 a day. No GPU rented "
-                "at any point.",
+                "Gemini free tier via Google AI Studio; per-model limits are checked in AI Studio. "
+                "Qwen runs only on the laptop. No GPU rented at any point.",
             ],
             [
                 "Managed databases",
-                "Supabase in Mumbai: Postgres with pgvector (500 MB), Storage (1 GB) and Auth. "
-                "Pauses after 7 days idle.",
+                "Supabase free tier: Postgres with pgvector (500 MB) and Storage (1 GB). Pauses "
+                "after 7 days idle.",
             ],
             [
                 "Containerisation",
-                "Docker container for repeatable deployment on the Hugging Face Space.",
+                "None. The Space is built by Hugging Face from app.py and requirements.txt; the "
+                "laptop uses a uv-locked environment.",
             ],
             [
                 "CI/CD",
-                "Automated tests run before demo deployment. A failed smoke test blocks release.",
+                "GitHub Actions runs ruff and pytest on pushes to main and on pull requests. The "
+                "Space is deployed by a scripted folder upload with huggingface_hub.",
             ],
             [
                 "Config & secrets",
-                "Runtime secrets in Space settings; deployment secrets in the automation service.",
+                "Model ids, paths and limits in config/defaults.yaml; keys in the local .env and "
+                "the Space secrets.",
             ],
             [
                 "Domain and HTTPS",
@@ -1155,18 +1182,17 @@ def section_11(d) -> None:
             ],
             [
                 "Monitoring (LLMOps)",
-                "Langfuse free tier. Every call logs latency, token count, which passages were "
-                "retrieved and the guardrail result.",
+                "No tracing service. Each answer is stored with its step trace in chat_messages; "
+                "each run manifest records model ids and warnings, including Gemini review counts.",
             ],
             [
                 "Estimated monthly cost",
-                "₹0. A 90 s clip uses about 8 MB, so roughly 125 clips fit in the free bucket, and "
-                "a demo day stays well under the 250-call daily quota.",
+                "₹0. Free tiers only; Gemini calls per run are capped by config "
+                "(ppe.maximum_gemini_verifications, one scene request per video).",
             ],
             [
                 "Public demo URL",
-                "Planned for Week 1 on a Hugging Face Space subdomain. The URL is filled in here "
-                "once live.",
+                "https://huggingface.co/spaces/Vardhan220805/safety-twin",
             ],
         ],
         [0.8, 3.0],
@@ -1176,13 +1202,12 @@ def section_11(d) -> None:
     steps(
         d,
         [
-            "Create the Supabase project, enable pgvector, add a private media bucket and turn on "
-            "Google sign-in.",
-            "Create the database tables using the setup guide.",
-            "Fetch, chunk and index the law corpus using the prepared script.",
-            "Create the Hugging Face Space, add the API keys as Space secrets, and sync the "
-            "source.",
-            "Run the smoke test against the public URL, then publish the demo run.",
+            "Create the Supabase project, enable pgvector and add the private run-media bucket.",
+            "Run cloud/schema.sql once in the Supabase SQL editor.",
+            "Embed and upload the 27-clause corpus: uv run python -m cloud.corpus_sync.",
+            "Create the Gradio Space, add the Supabase and Gemini keys as Space secrets, and "
+            "upload cloud/, llm/ and shared/ with space_app.py as app.py (README, Cloud Setup).",
+            "Process a clip locally, publish it, and open it on the public URL.",
         ],
     )
 
@@ -1193,13 +1218,13 @@ def section_11(d) -> None:
             "Back up the database and verify the row counts.",
             "Empty and delete the media bucket, then pause the Supabase project.",
             "Pause the Hugging Face Space.",
-            "Revoke the Gemini, Hugging Face and Langfuse keys.",
+            "Revoke the Gemini, Hugging Face and Supabase service-role keys.",
         ],
     )
     caption(
         d,
-        "The sequence is scripted and rehearsed in Week 12, so a TA can run it unaided. No "
-        "payment method is attached to any account at any point.",
+        "Each step is a dashboard action or one command, so a TA can run it unaided. No payment "
+        "method is attached to any account at any point.",
     )
 
 
@@ -1214,22 +1239,23 @@ def section_12(d) -> None:
                 "7 days, with a 30–60 s cold start.",
                 "M",
                 "M",
-                "A scheduled job pings the service every 12 h during demo week, plus a warm-up "
-                "before the presentation.",
+                "Open the Space and run one query a few minutes before the presentation; keep a "
+                "local run and a backup recording ready.",
             ],
             [
-                "Model free-tier quota exhausted during the demo (250 requests/day, 10/min).",
-                "L",
-                "H",
-                "Answers are cached so rehearsals cost nothing, and per-user rate limits are "
-                "enforced server-side.",
+                "Gemini free-tier quota exhausted during processing or the demo.",
+                "M",
+                "M",
+                "PPE and scene results are cached per crop and per video; a run still completes "
+                "on the classifier, and Q&A falls back to deterministic answers quoting the "
+                "clauses.",
             ],
             [
                 "Database or storage quota reached, putting Postgres into read-only mode.",
                 "L",
                 "M",
-                "The health check reports both sizes and alerts at 80%. Past that, the oldest "
-                "videos are evicted and the incidents and briefings are kept.",
+                "Per run only the video, report, one crop per incident and at most 48 reviewed "
+                "crops are uploaded; old runs' media can be deleted while incident rows stay.",
             ],
             [
                 "Detection quality on real site footage falls short of what the rules need.",
@@ -1239,11 +1265,12 @@ def section_12(d) -> None:
                 "“inconclusive” with a reason code rather than guessing.",
             ],
             [
-                "Evaluation timeline slips and the Should-priority agent work is unfinished.",
+                "Geometry-dependent rules (R4, R5) cannot be evaluated on moving or sparse "
+                "footage.",
+                "H",
                 "M",
-                "M",
-                "FR-6 and FR-7 are scoped so the Ask tab can be disabled without breaking the core "
-                "product; the Must requirements stand alone.",
+                "Observed on the SARD clips tried: the plane fit fails its gates and R4/R5 report "
+                "unsupported with a reason code; R1–R3 still run.",
             ],
         ],
         [1.25, 0.55, 0.40, 1.80],
@@ -1340,7 +1367,18 @@ def section_16(d) -> None:
     table(
         d,
         ["Date", "Version", "Change", "Reason"],
-        [["25-09-2026", "v1.0", "Initial submission", "CS3235 Week 1 requirement"]],
+        [
+            ["25-09-2026", "v1.0", "Initial submission", "CS3235 Week 1 requirement"],
+            [
+                "14-10-2026",
+                "v1.1",
+                "As-built architecture: Gradio Space (no FastAPI, sign-in or Langfuse); fixed Q&A "
+                "pipeline instead of an agent; deterministic L2 briefings; MJCSD-trained YOLO11n; "
+                "27-clause corpus; measured detector and narration results; evidence and "
+                "PPE-review crops published and shown; primary module set to 3 Multimodal.",
+                "Align the document with the delivered system",
+            ],
+        ],
         [0.6, 0.5, 1.6, 1.3],
     )
 

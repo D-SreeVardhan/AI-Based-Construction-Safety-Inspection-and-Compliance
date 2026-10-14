@@ -136,46 +136,44 @@ def build() -> Path:
     fig.patch.set_facecolor(PAGE_BG)
     ax.set_facecolor(PAGE_BG)
     ax.set_xlim(0, 100)
-    ax.set_ylim(0, 100)
+    ax.set_ylim(-5, 100)
     ax.axis("off")
 
     # Each region is centred on its boxes: box centre == (x0 + x1) / 2, with the
     # label occupying the strip below the region's top edge.
-    region(ax, 3, 14, 25, 38, "Developer laptop  ·  offline", LOCAL_EDGE, LOCAL_BG)
-    region(ax, 34, 14, 57, 69, "Hugging Face Space  ·  Docker", CLOUD_EDGE, CLOUD_BG)
-    region(ax, 71, 14, 98, 69, "Supabase  ·  ap-south-1", CLOUD_EDGE, CLOUD_BG)
+    region(ax, 3, 6, 25, 38, "Developer laptop  ·  offline", LOCAL_EDGE, LOCAL_BG)
+    region(ax, 34, 30, 57, 69, "Hugging Face Space  ·  Gradio", CLOUD_EDGE, CLOUD_BG)
+    region(ax, 71, 6, 98, 69, "Supabase", CLOUD_EDGE, CLOUD_BG)
 
-    box(ax, 14, 57.5, 22, 11, "User browser", "web app")
-    box(ax, 14, 24, 20, 12, "Video processing", "detect · track · rules R1–R5")
+    box(ax, 14, 57.5, 22, 11, "User browser", "Gradio page")
+    box(ax, 14, 26, 20, 12, "Video pipeline", "detect · PPE · rules R1–R5")
+    box(ax, 14, 13, 20, 8, "Local review app", "publish button")
 
-    box(ax, 45.5, 57.5, 21, 12, "FastAPI service", "API + web app")
-    box(ax, 45.5, 40, 21, 11, "Grounding guardrail", "8 checks, no model")
-    box(ax, 45.5, 24, 21, 9, "Ingest worker", "background queue")
+    box(ax, 45.5, 57.5, 21, 12, "Space app", "runs · briefings · Ask")
+    box(ax, 45.5, 40, 21, 11, "Grounding check", "trigram overlap, no model")
 
-    box(ax, 84.5, 57.5, 25, 11, "Supabase Auth", "Google sign-in")
-    box(ax, 84.5, 40, 25, 12, "Postgres + pgvector", "incidents · law corpus")
-    box(ax, 84.5, 23, 25, 10, "Supabase Storage", "images · video")
+    box(ax, 84.5, 50, 25, 14, "Postgres + pgvector", "runs · incidents · clauses")
+    box(ax, 84.5, 20, 25, 12, "Supabase Storage", "private bucket · video · report · crops")
 
-    box(ax, 45.5, 90, 30, 11, "Gemini 2.5 Flash", "reads images · writes answers")
+    box(ax, 45.5, 90, 30, 11, "Gemini API", "PPE crops · scene · embeddings · answers")
 
-    # 1-6 trace one Ask request in order: authenticate, gather context, prompt the
-    # model, check the output, stream it. A-C are the separate offline publish path.
-    # The API signs Storage URLs locally, so an Ask request never calls Storage; the
-    # browser loads crops afterwards with the signed URL it was handed.
+    # 1-5 trace one Ask request: load the run and clauses, embed and answer, check
+    # the answer, show it. Media is played from a signed URL minted per view (S).
+    # A-B are the publish path from the laptop, which writes to Supabase directly.
     arrow(ax, (25, 60.5), (35, 60.5), "1  question", (30, 63.1))
-    arrow(ax, (56, 59), (72, 58), "2  check sign-in", (64, 60.8))
-    arrow(ax, (56, 55), (72, 43), "3  find the clause", (64, 50.5))
-    arrow(ax, (45.5, 63.5), (45.5, 84.5), "4  prompt + clause", (45.5, 75.0))
-    arrow(ax, (45.5, 51.5), (45.5, 46), "5  grounding check", (45.5, 48.7))
-    arrow(ax, (35, 54.5), (25, 54.5), "6  stream answer", (30, 51.9))
+    arrow(ax, (56, 59), (72, 54), "2  run + clauses", (64, 59.6))
+    arrow(ax, (45.5, 63.5), (45.5, 84.5), "3  embed + answer", (45.5, 75.0))
+    arrow(ax, (45.5, 51.5), (45.5, 46), "4  check", (45.5, 48.7))
+    arrow(ax, (35, 54.5), (25, 54.5), "5  answer + media", (30, 51.9))
+    arrow(ax, (56, 53), (72, 25), "S  sign media URL", (64, 40))
 
-    arrow(ax, (24, 24), (35, 24), "A  publish", (29.5, 26.8))
-    arrow(ax, (56, 27), (72, 36), "B  save incidents", (64, 32.5))
-    arrow(ax, (56, 21), (72, 21), "C  save images", (64, 18.3))
+    arrow(ax, (24, 14), (72, 45), "A  publish rows", (40, 24), rad=-0.12)
+    arrow(ax, (24, 11), (72, 17), "B  upload media", (52, 11.2))
+    arrow(ax, (22, 32), (31, 85), "PPE crops\nkeyframes", (27.6, 44), rad=0.0)
 
     ax.text(
         50,
-        6.6,
+        1.6,
         "The rule engine decides what counts as a violation. The AI only explains an incident — it "
         "cannot change one.",
         ha="center",
@@ -187,9 +185,9 @@ def build() -> Path:
     )
     ax.text(
         50,
-        2.6,
-        "API keys live in the Hugging Face Space settings, never in the repository and never in "
-        "the browser.",
+        -2.4,
+        "API keys live in the local .env and the Space secrets, never in the repository and never "
+        "in the browser.",
         ha="center",
         va="center",
         fontsize=7.5,
