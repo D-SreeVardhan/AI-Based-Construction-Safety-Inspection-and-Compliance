@@ -10,12 +10,15 @@ Design principles:
 
 from __future__ import annotations
 
+import base64
 import html
 from datetime import UTC, datetime
+from pathlib import Path
 
 from llm.regulations import CATALOGUE_SHA256, EMBEDDING_MODEL, SOURCE_URL
 from llm.retrieval import MODEL_ID, RETRIEVAL_MODE
 from shared.enums import RuleStatus
+from shared.media import is_jpeg
 from shared.schemas.incidents import IncidentRecord
 from shared.schemas.llm import GroundedBriefing
 from shared.schemas.run import RunManifest
@@ -133,6 +136,11 @@ h2 {{
   font-size: .82rem; color: {_C["text_dim"]};
 }}
 .incident-card .ic-action span {{ color: {_C["amber"]}; font-weight: 600; }}
+.incident-card.has-evidence {{ display: flex; gap: 1rem; align-items: flex-start; }}
+.incident-card .ic-evidence {{
+  width: 200px; flex: none; border: 1px solid {_C["border"]}; border-radius: 4px;
+}}
+.incident-card .ic-body {{ flex: 1; min-width: 0; }}
 
 /* ── briefing cards ──────────────────────────────────────────────────── */
 .briefings {{ display: flex; flex-direction: column; gap: .75rem; }}
@@ -195,7 +203,16 @@ def _coverage_block(manifest: RunManifest) -> str:
     return '<div class="coverage-grid">' + "".join(pills) + "</div>"
 
 
-def _incidents_block(incidents: tuple[IncidentRecord, ...]) -> str:
+def _evidence_uri(run_dir: Path | None, incident: IncidentRecord) -> str | None:
+    if run_dir is None:
+        return None
+    path = run_dir / incident.evidence_path
+    if not is_jpeg(path):
+        return None
+    return "data:image/jpeg;base64," + base64.b64encode(path.read_bytes()).decode("ascii")
+
+
+def _incidents_block(incidents: tuple[IncidentRecord, ...], run_dir: Path | None = None) -> str:
     if not incidents:
         return '<p class="empty">No incidents detected in this run.</p>'
     cards = []
@@ -203,8 +220,16 @@ def _incidents_block(incidents: tuple[IncidentRecord, ...]) -> str:
         conf_str = f"{inc.confidence:.0%}" if inc.confidence is not None else "—"
         t_end = inc.resolved_at_s or inc.first_seen_s
         track = inc.canonical_track_id or "—"
+        uri = _evidence_uri(run_dir, inc)
+        image = (
+            f'<img class="ic-evidence" src="{uri}" alt="evidence for {_e(inc.incident_id)}">'
+            if uri
+            else ""
+        )
         cards.append(
-            f'<div class="incident-card">'
+            f'<div class="incident-card{" has-evidence" if uri else ""}">'
+            f"{image}"
+            f'<div class="ic-body">'
             f'<div class="ic-header">'
             f'<span class="ic-rule">{_e(inc.rule_id.value)} — {_e(inc.status.value)}</span>'
             f'<span class="ic-meta">'
@@ -214,7 +239,7 @@ def _incidents_block(incidents: tuple[IncidentRecord, ...]) -> str:
             f"</div>"
             f'<div class="ic-obs">{_e(inc.observation_text)}</div>'
             f'<div class="ic-action"><span>Action:</span> {_e(inc.action_text)}</div>'
-            f"</div>"
+            f"</div></div>"
         )
     return '<div class="incidents">' + "".join(cards) + "</div>"
 
@@ -269,8 +294,11 @@ def build_report_html(
     manifest: RunManifest,
     incidents: tuple[IncidentRecord, ...],
     briefings: tuple[GroundedBriefing, ...],
+    run_dir: Path | None = None,
 ) -> str:
     """Return a self-contained HTML string for the run report.
+
+    When *run_dir* is given, JPEG evidence crops are inlined into the incident cards.
 
     Suitable for writing to ``report.html`` in the run directory or uploading
     to Supabase storage.
@@ -314,7 +342,7 @@ def build_report_html(
 {_coverage_block(manifest)}
 
 <h2>Incidents ({len(incidents)})</h2>
-{_incidents_block(incidents)}
+{_incidents_block(incidents, run_dir)}
 
 <h2>Grounded Briefings</h2>
 {_briefings_block(briefings)}

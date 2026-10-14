@@ -50,9 +50,10 @@ app/              local HTTP server and browser review UI
 cloud/
   config.py       CloudConfig dataclass and load_cloud_config()
   corpus_sync.py  syncs 27-clause corpus to Supabase with Gemini embeddings
-  publish.py      uploads run bundles to Supabase storage + DB
+  publish.py      uploads run bundles + evidence/PPE-review crops + media.json index
+  media_view.py   signs published crops and renders incident cards / crop grid (Space)
   space_app.py    Hugging Face Gradio Space
-  supabase.py     REST client (select / upsert / upload / signed URLs)
+  supabase.py     REST client (select / upsert / upload / download / signed URLs)
   schema.sql      Supabase DDL (runs, incidents, briefings, clause_chunks, chat_messages)
 jobs/
   pipeline_job.py FakePipelineJob (fixtures) + RealPipelineJob (YOLO + PPE + Gemini)
@@ -73,6 +74,7 @@ pipeline/
   scene/          Gemini keyframe proposals, geometric consensus, cached scene model
   geometry/       pose keypoints, ground-plane fit, worker-height distances, camera-motion gate
   rules/          engine.py (R1-R5), zone_rules (R3), proximity_rules (R4), edge_rules (R5)
+  evidence/       per-incident evidence crops cut from the sampled frames
   render/         render_twin_video() — side-by-side annotated feed + top-down map
   report/         build_report_html() — self-contained styled HTML report
 shared/           enums, config, coordinates, pydantic schemas
@@ -116,7 +118,8 @@ report.html         self-contained HTML report with provenance block
 safety_twin.mp4     side-by-side twin: annotated source + approximate top-down site map
 crops/              sampled person crops (one per track every 3 s)
 ppe_verification.json  hybrid mode only: per reviewed crop, classifier vs Gemini verdict
-evidence/           per-incident evidence placeholders
+evidence/           per-incident evidence crop: largest view of the track in the alert
+                    window, box drawn, upscaled to >= 360 px (also inlined in report.html)
 ```
 
 **PPE: hybrid classifier + Gemini, routed by resolution.** When
@@ -189,7 +192,11 @@ uv run safety-twin publish output/<run_id>
 ```
 
 or press **Publish to Space** in the local app after a run finishes. Publishing the same
-run again overwrites its media and rows.
+run again overwrites its media and rows. Storage receives the twin video, the HTML report,
+each incident's evidence crop, the Gemini-reviewed PPE crops (up to 48; a plain sample of
+`crops/` in Gemini-only mode), and a `media.json` index. The Space reads that index and
+shows each incident card with its evidence crop and a grid of reviewed crops with the
+classifier and Gemini verdicts. Runs published before the index existed show text only.
 
 **Deploy the Hugging Face Space:**
 

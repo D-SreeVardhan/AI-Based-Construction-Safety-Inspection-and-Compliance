@@ -79,13 +79,16 @@ class SupabaseClient:
         return json.loads(data.decode("utf-8"))
 
     def upload_file(self, local_path: Path, object_path: str, *, content_type: str) -> str:
+        return self.upload_bytes(local_path.read_bytes(), object_path, content_type=content_type)
+
+    def upload_bytes(self, data: bytes, object_path: str, *, content_type: str) -> str:
         quoted_path = quote(object_path.lstrip("/"))
         url = (
             f"{self.config.supabase_url}/storage/v1/object/"
             f"{self.config.supabase_bucket}/{quoted_path}"
         )
         headers = {**self._headers(content_type=content_type), "x-upsert": "true"}
-        self._request("POST", url, body=local_path.read_bytes(), headers=headers, timeout=600)
+        self._request("POST", url, body=data, headers=headers, timeout=600)
         return f"{self.config.supabase_bucket}/{object_path}"
 
     def count(self, table: str, *, filters: dict[str, str] | None = None) -> int:
@@ -120,3 +123,31 @@ class SupabaseClient:
         if not isinstance(signed_url, str):
             return None
         return f"{self.config.supabase_url}/storage/v1{signed_url}"
+
+    def signed_urls(self, object_paths: list[str], *, expires_in: int = 3600) -> dict[str, str]:
+        """Sign many objects in one request; missing objects are left out of the result."""
+        if not object_paths:
+            return {}
+        url = f"{self.config.supabase_url}/storage/v1/object/sign/{self.config.supabase_bucket}"
+        body = json.dumps({"expiresIn": expires_in, "paths": object_paths}).encode()
+        try:
+            data = self._request("POST", url, body=body)
+        except RuntimeError:
+            return {}
+        signed: dict[str, str] = {}
+        for item in json.loads(data.decode("utf-8")):
+            path, signed_url = item.get("path"), item.get("signedURL")
+            if isinstance(path, str) and isinstance(signed_url, str) and not item.get("error"):
+                signed[path] = f"{self.config.supabase_url}/storage/v1{signed_url}"
+        return signed
+
+    def download(self, object_path: str) -> bytes | None:
+        quoted_path = quote(object_path.lstrip("/"))
+        url = (
+            f"{self.config.supabase_url}/storage/v1/object/"
+            f"{self.config.supabase_bucket}/{quoted_path}"
+        )
+        try:
+            return self._request("GET", url)
+        except RuntimeError:
+            return None

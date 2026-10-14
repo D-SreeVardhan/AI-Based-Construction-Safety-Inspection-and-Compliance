@@ -15,6 +15,7 @@ from cloud.publish import publish_run
 from jobs.pipeline_job import create_pipeline_job
 from llm.embedding_cache import get_embeddings
 from llm.qa import answer_run_question
+from shared.media import is_jpeg
 from shared.schemas.incidents import IncidentRecord
 from shared.schemas.llm import GroundedBriefing
 from shared.schemas.run import RuleCoverageEntry
@@ -22,7 +23,11 @@ from shared.schemas.run import RuleCoverageEntry
 WEB_ROOT = Path(__file__).resolve().parent / "web"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MAX_UPLOAD_BYTES = 400 * 1024 * 1024
-CLIP_ROOTS = (PROJECT_ROOT / "data", PROJECT_ROOT / "tests" / "fixtures")
+CLIP_ROOTS = (
+    PROJECT_ROOT / "data" / "demo",  # pre-cut 60 s demo clips, shown first
+    PROJECT_ROOT / "data",
+    PROJECT_ROOT / "tests" / "fixtures",
+)
 
 
 class DeskHandler(BaseHTTPRequestHandler):
@@ -104,6 +109,9 @@ class DeskHandler(BaseHTTPRequestHandler):
         briefings_path = job.run_dir / "briefings.json"
         incidents = json.loads(incidents_path.read_text(encoding="utf-8")).get("incidents", [])
         briefings = json.loads(briefings_path.read_text(encoding="utf-8")).get("briefings", [])
+        for incident in incidents:
+            if is_jpeg(job.run_dir / incident["evidence_path"]):
+                incident["evidence_url"] = f"/runs/{manifest.run_id}/{incident['evidence_path']}"
         self._send_json(
             200,
             {
@@ -216,7 +224,22 @@ class DeskHandler(BaseHTTPRequestHandler):
 
     def _send_run_artifact(self, rest: str) -> None:
         parts = rest.split("/")
-        if len(parts) != 2 or parts[0].startswith(".") or ".." in rest:
+        if parts[0].startswith(".") or ".." in rest:
+            self.send_error(404)
+            return
+        if (
+            len(parts) == 3
+            and _is_safe_run_id(parts[0])
+            and parts[1] == "evidence"
+            and parts[2].endswith(".jpg")
+        ):
+            path = self.output_root / parts[0] / "evidence" / parts[2]
+            if not is_jpeg(path):
+                self.send_error(404)
+                return
+            self._send_file(path, "image/jpeg")
+            return
+        if len(parts) != 2:
             self.send_error(404)
             return
         run_id, name = parts
@@ -277,6 +300,7 @@ def resolve_local_video(raw_path: object) -> Path:
 
 
 def list_local_clips() -> list[dict[str, str]]:
+    seen: set[Path] = set()
     clips: list[dict[str, str]] = []
     for root in CLIP_ROOTS:
         if not root.exists():
@@ -284,6 +308,10 @@ def list_local_clips() -> list[dict[str, str]]:
         for path in sorted(root.rglob("*")):
             if not path.is_file() or path.suffix.lower() not in VIDEO_SUFFIXES:
                 continue
+            resolved = path.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
             clips.append(
                 {
                     "name": path.name,
