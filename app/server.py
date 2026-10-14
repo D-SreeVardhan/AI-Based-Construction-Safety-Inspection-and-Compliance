@@ -23,7 +23,11 @@ from shared.schemas.run import RuleCoverageEntry
 WEB_ROOT = Path(__file__).resolve().parent / "web"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MAX_UPLOAD_BYTES = 400 * 1024 * 1024
-CLIP_ROOTS = (PROJECT_ROOT / "data", PROJECT_ROOT / "tests" / "fixtures")
+CLIP_ROOTS = (
+    PROJECT_ROOT / "data" / "demo",  # pre-cut 60 s demo clips, shown first
+    PROJECT_ROOT / "data",
+    PROJECT_ROOT / "tests" / "fixtures",
+)
 
 
 class DeskHandler(BaseHTTPRequestHandler):
@@ -296,6 +300,7 @@ def resolve_local_video(raw_path: object) -> Path:
 
 
 def list_local_clips() -> list[dict[str, str]]:
+    seen: set[Path] = set()
     clips: list[dict[str, str]] = []
     for root in CLIP_ROOTS:
         if not root.exists():
@@ -303,6 +308,10 @@ def list_local_clips() -> list[dict[str, str]]:
         for path in sorted(root.rglob("*")):
             if not path.is_file() or path.suffix.lower() not in VIDEO_SUFFIXES:
                 continue
+            resolved = path.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
             clips.append(
                 {
                     "name": path.name,
