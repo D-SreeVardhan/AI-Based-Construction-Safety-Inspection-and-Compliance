@@ -17,6 +17,7 @@ import cv2
 from llm.adjudicator import GeminiPPEAdjudicator
 from llm.regulations import CATALOGUE_SHA256
 from llm.retrieval import RETRIEVAL_MODE, build_grounded_briefing
+from pipeline.evidence import write_incident_evidence
 from pipeline.geometry import build_geometry
 from pipeline.intake import FrameSampler
 from pipeline.render import render_twin_video
@@ -438,7 +439,10 @@ class FakePipelineJob:
         self._write_json(self.run_dir / "run_manifest.json", manifest)
 
         report_path = self.run_dir / "report.html"
-        report_path.write_text(build_report_html(manifest, incidents, briefings), encoding="utf-8")
+        report_path.write_text(
+            build_report_html(manifest, incidents, briefings, run_dir=self.run_dir),
+            encoding="utf-8",
+        )
         artifacts = {**artifacts, "report": "report.html"}
         manifest = manifest.model_copy(update={"output_artifacts": artifacts})
         self._write_json(self.run_dir / "run_manifest.json", manifest)
@@ -689,13 +693,16 @@ class RealPipelineJob:
             self.run_dir / "briefings.json",
             {"schema_version": 1, "briefings": [b.model_dump(mode="json") for b in briefings]},
         )
-        for incident in incidents:
-            evidence_file = self.run_dir / incident.evidence_path
-            evidence_file.parent.mkdir(parents=True, exist_ok=True)
-            if not evidence_file.exists():
-                evidence_file.write_text(
-                    f"evidence placeholder for {incident.incident_id}\n", encoding="utf-8"
-                )
+        try:
+            evidence_written = write_incident_evidence(
+                sampler=sampler,
+                observations=observations,
+                incidents=incidents,
+                run_dir=self.run_dir,
+            )
+        except RuntimeError:
+            evidence_written = set()
+        missing_evidence = len(incidents) - len(evidence_written)
 
         # --- Stage 4: Render ---
         job = job.model_copy(
@@ -748,6 +755,8 @@ class RealPipelineJob:
         run_warnings.extend(ppe.warnings)
         run_warnings.extend(_scene_warnings(scene))
         run_warnings.extend(_geometry_warnings(geometry))
+        if missing_evidence:
+            run_warnings.append(f"{missing_evidence} incident(s) have no evidence crop.")
 
         manifest = RunManifest(
             run_id=self.run_id,
@@ -785,7 +794,10 @@ class RealPipelineJob:
         self._write_json(self.run_dir / "run_manifest.json", manifest)
 
         report_path = self.run_dir / "report.html"
-        report_path.write_text(build_report_html(manifest, incidents, briefings), encoding="utf-8")
+        report_path.write_text(
+            build_report_html(manifest, incidents, briefings, run_dir=self.run_dir),
+            encoding="utf-8",
+        )
         artifacts = {**artifacts, "report": "report.html"}
         manifest = manifest.model_copy(update={"output_artifacts": artifacts})
         self._write_json(self.run_dir / "run_manifest.json", manifest)

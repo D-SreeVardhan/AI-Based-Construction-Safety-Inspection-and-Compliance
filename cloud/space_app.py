@@ -6,6 +6,12 @@ import gradio as gr
 import spaces
 
 from cloud.config import load_cloud_config
+from cloud.media_view import (
+    incident_cards_html,
+    load_media,
+    object_path,
+    review_gallery_html,
+)
 from cloud.supabase import SupabaseClient
 from llm.embedding_cache import get_embeddings
 from llm.qa import answer_run_question
@@ -24,20 +30,11 @@ def _client() -> SupabaseClient:
     return SupabaseClient(load_cloud_config())
 
 
-def _storage_object_path(client: SupabaseClient, stored_path: str | None) -> str | None:
-    if not stored_path:
-        return None
-    prefix = f"{client.config.supabase_bucket}/"
-    if stored_path.startswith(prefix):
-        return stored_path[len(prefix) :]
-    return stored_path
-
-
 def _signed_media(client: SupabaseClient, stored_path: str | None) -> str | None:
-    object_path = _storage_object_path(client, stored_path)
-    if object_path is None:
+    path = object_path(client, stored_path)
+    if path is None:
         return None
-    return client.signed_url(object_path)
+    return client.signed_url(path)
 
 
 def _video_html(url: str | None) -> str:
@@ -72,14 +69,15 @@ def list_runs() -> tuple[object, str]:
         return gr.update(choices=[], value=None), f"DB error: {exc}"
 
 
-def load_run(run_id: str | None) -> tuple[str, str, str]:
+def load_run(run_id: str | None) -> tuple[str, str, str, str, str]:
+    empty = ("", "", "", _video_html(None))
     if not run_id:
-        return "Pick a run.", "", _video_html(None)
+        return ("Pick a run.", *empty)
     try:
         client = _client()
         run_rows = client.select("runs", filters={"id": f"eq.{run_id}"}, limit=1)
         if not run_rows:
-            return f"No run named `{run_id}`.", "", _video_html(None)
+            return (f"No run named `{run_id}`.", *empty)
         run = run_rows[0]
         manifest = run.get("manifest") or {}
         incidents = client.select("incidents", filters={"run_id": f"eq.{run_id}"}, order="id.asc")
@@ -88,10 +86,7 @@ def load_run(run_id: str | None) -> tuple[str, str, str]:
             filters={"run_id": f"eq.{run_id}"},
             order="incident_id.asc",
         )
-        incident_lines = [
-            f"### {item['rule_id']} — {item['status']}\n{item['payload']['observation_text']}"
-            for item in incidents
-        ]
+        evidence_urls, review = load_media(client, run_id)
         briefing_lines = []
         for item in briefings:
             payload = item["payload"]
@@ -111,12 +106,14 @@ def load_run(run_id: str | None) -> tuple[str, str, str]:
             f"Coverage: {cov}"
         )
         return (
-            summary + "\n\n" + "\n\n".join(incident_lines),
+            summary,
+            incident_cards_html(incidents, evidence_urls),
+            review_gallery_html(review),
             "\n\n".join(briefing_lines),
             _video_html(_signed_media(client, run.get("video_path"))),
         )
     except Exception as exc:  # noqa: BLE001
-        return f"Error: {exc}", "", _video_html(None)
+        return (f"Error: {exc}", *empty)
 
 
 def ask_run(run_id: str | None, question: str) -> str:
@@ -178,7 +175,15 @@ with gr.Blocks(title="Construction Safety Twin") as demo:
     run_list = gr.Markdown(value="Loading…")
     twin_video = gr.HTML(label="Safety twin")
     run_summary = gr.Markdown()
-    briefings_box = gr.Markdown(label="Grounded briefings")
+    gr.Markdown("## Incidents")
+    incident_cards = gr.HTML()
+    gr.Markdown(
+        "## PPE review crops\n"
+        "Person crops sent to Gemini, with the classifier and Gemini verdicts (helmet / vest)."
+    )
+    review_gallery = gr.HTML()
+    gr.Markdown("## Grounded briefings")
+    briefings_box = gr.Markdown()
     with gr.Row():
         question_input = gr.Textbox(
             label="Ask this run",
@@ -194,7 +199,7 @@ with gr.Blocks(title="Construction Safety Twin") as demo:
     run_picker.change(
         load_run,
         inputs=run_picker,
-        outputs=[run_summary, briefings_box, twin_video],
+        outputs=[run_summary, incident_cards, review_gallery, briefings_box, twin_video],
     )
     ask_button.click(ask_run, inputs=[run_picker, question_input], outputs=answer_output)
     zero_gpu_probe.click(zero_gpu_healthcheck, outputs=zero_gpu_status)

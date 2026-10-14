@@ -532,6 +532,12 @@ figcaption {
   font-size: 0.88rem;
 }
 
+.incidents .evidence {
+  grid-column: 2;
+  max-width: 220px;
+  border: 1px solid var(--line);
+}
+
 .briefings li {
   display: block;
   padding: 0.75rem 0;

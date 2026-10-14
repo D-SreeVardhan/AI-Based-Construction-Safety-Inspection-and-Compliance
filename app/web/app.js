@@ -270,6 +270,14 @@ function incidentRow(item) {
   text.className = "observation";
   text.textContent = item.observation_text;
   li.append(id, text);
+  if (item.evidence_url) {
+    const img = document.createElement("img");
+    img.className = "evidence";
+    img.src = item.evidence_url;
+    img.alt = `Evidence crop for ${item.rule_id}`;
+    img.loading = "lazy";
+    li.append(img);
+  }
   return li;
 }
 

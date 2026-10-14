@@ -18,7 +18,7 @@ data/source/*
 output/*
 !output/.gitkeep
 data/incidents.db
-evidence/
+/evidence/
 *.partial
 
 # Model weights and trained adapters
