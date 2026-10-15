@@ -37,6 +37,13 @@ maps:
       # v3 hazards: what hangs from a crane (R7) and fire or smoke (R8).
       crane hook: suspended_load
       suspended load: suspended_load
+      # Candidate prompts for R7, tried on SynthSite's dev split only
+      # (evaluation/synthsite_eval.py); unused unless a model was built with them.
+      crane hook block: suspended_load
+      load hanging from a crane: suspended_load
+      steel beam lifted by a crane: suspended_load
+      bundle of rebar lifted by a crane: suspended_load
+      concrete bucket hanging from a crane: suspended_load
       fire: fire
       smoke: smoke
   # Frozen after profiling the Roboflow Construction Site Safety v27 export (Phase 3).

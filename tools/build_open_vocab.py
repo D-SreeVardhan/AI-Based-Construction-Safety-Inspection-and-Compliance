@@ -65,23 +65,31 @@ def main() -> None:
     parser.add_argument(
         "--out", type=Path, default=Path("artifacts/models/pretrained/yoloe-26l-construction.pt")
     )
+    parser.add_argument(
+        "--add-prompts",
+        type=Path,
+        help="JSON {prompt: class} added to the vocabulary (experiments; see class_map.yaml)",
+    )
     args = parser.parse_args()
 
     weights = args.weights.resolve()
     out = args.out.resolve()
-    names = list(VOCABULARY)
+    vocabulary = dict(VOCABULARY)
+    if args.add_prompts:
+        vocabulary |= json.loads(args.add_prompts.read_text(encoding="utf-8"))
+    names = list(vocabulary)
     # The text encoder (mobileclip2_b.ts) is looked up in the working directory.
     with working_directory(weights.parent):
         model = YOLOE(str(weights))
         model.set_classes(names, model.get_text_pe(names))
         model.save(str(out))
-    vocabulary = out.with_suffix(".json")
-    vocabulary.write_text(
+    sidecar = out.with_suffix(".json")
+    sidecar.write_text(
         json.dumps(
             {
                 "source_weights": weights.name,
                 "source_sha256": hashlib.sha256(weights.read_bytes()).hexdigest(),
-                "prompts": VOCABULARY,
+                "prompts": vocabulary,
             },
             indent=2,
         )

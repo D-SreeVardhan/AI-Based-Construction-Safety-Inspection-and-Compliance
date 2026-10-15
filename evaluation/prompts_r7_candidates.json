@@ -1,0 +1,7 @@
+{
+  "crane hook block": "suspended_load",
+  "load hanging from a crane": "suspended_load",
+  "steel beam lifted by a crane": "suspended_load",
+  "bundle of rebar lifted by a crane": "suspended_load",
+  "concrete bucket hanging from a crane": "suspended_load"
+}
