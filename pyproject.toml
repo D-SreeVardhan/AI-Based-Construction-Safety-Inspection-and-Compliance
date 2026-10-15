@@ -51,9 +51,15 @@ report = [
   "pandas>=2.2,<3",
   "pyarrow>=17,<23",
 ]
+serve = [
+    "fastapi>=0.115,<1",
+    "huggingface-hub>=0.34,<2",
+    "uvicorn>=0.32,<1",
+]
 
 [dependency-groups]
 dev = [
+  "httpx>=0.27,<1",
   "pytest>=8.4,<9",
   "pytest-cov>=7,<8",
   "ruff==0.14.4",
@@ -105,3 +111,4 @@ select = ["E", "F", "I", "UP", "B"]
 "pipeline/report/assets.py" = ["E501"]
 "pipeline/report/twin_viewer.py" = ["E501"]
 "pipeline/report/risk_html.py" = ["E501"]
+"app/cloud.py" = ["E501"]  # gallery page template

@@ -14,7 +14,18 @@ jobs:
         with:
           version: "0.12.13"
           python-version: "3.11.9"
-      - run: uv sync --frozen --group dev
+      - run: uv sync --frozen --group dev --extra serve
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run pytest tests/unit tests/integration tests/e2e -k "not renders_mp4"
+
+  image:
+    # The hosted demo's container must build and answer /healthz.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t safety-twin:ci .
+      - run: |
+          docker run -d --name app -p 8080:8080 safety-twin:ci
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8080/healthz && exit 0; sleep 2; done
+          docker logs app; exit 1

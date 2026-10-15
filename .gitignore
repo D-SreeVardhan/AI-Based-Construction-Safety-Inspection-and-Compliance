@@ -56,3 +56,7 @@ build/
 .idea/
 .vscode/
 *.swp
+
+# Bundles staged for the cloud image (tools/publish_run.py --stage runs)
+runs/*
+!runs/.gitkeep

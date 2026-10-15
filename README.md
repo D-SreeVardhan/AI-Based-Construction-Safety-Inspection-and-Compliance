@@ -41,6 +41,10 @@ v3 is built against what commercial site-safety analytics and open-source projec
   - click a zone for its exposure;
   - incident markers on the timeline, an exposure heat layer and a hazards-only filter;
   - keyboard: Space, ←/→, 1/2/3 for camera presets, F to follow, Esc.
+- **Risk assessment and a grounded chatbot.**
+  - Every run gets a 5×5 risk register: likelihood from what the clip showed × severity from the catalogue, and controls in hierarchy-of-controls order.
+  - Rules that could not be checked are listed as *not assessed*, never as low risk.
+  - The *Ask about this run* chat answers from the run's facts and cites a fact for every claim. Each number and worker in an answer must appear in the facts that sentence cites, or the answer is replaced by one composed from the register.
 - **Re-evaluate the past.** `safety-twin reprocess output/<run>` re-runs geometry, rules and rendering on stored detections, with new zones or settings and no GPU.
 - **Faster.**
   - The detector runs on every 2nd frame, with tracks interpolated offline in between.
@@ -123,13 +127,14 @@ Zones only apply to shots whose view still matches the frame they were drawn on.
 
 **Performance** (GTX 1660 Ti, i5-10300H, 173 s 1440p clip, on mains power): 5m46s end to end with YOLOE-26l, the PPE classifier, pose, stitching, R1–R8, the 1080p video and the report, or 2.0× real time. On battery the GPU clocks down about 3×; the manifest warns when a run was timed on battery. Encoding uses NVENC or Intel Quick Sync when available (`video_codec: auto`). Detector trade-offs: `uv run python tools/benchmark_stage1.py clip.mp4 --models yolo26m.pt yolo26l.pt yolo26x.pt`, results in `evaluation/results/`.
 
-**Report.** `report.html` is a single offline web page with a sidebar and six sections: Overview, Digital twin, Incidents, Leading indicators, Site & camera, Run details. It adapts to light and dark mode and contains:
+**Report.** `report.html` is a single offline web page with a sidebar and seven sections: Overview, Digital twin, Incidents, Risk assessment, Leading indicators, Site & camera, Run details. It adapts to light and dark mode and contains:
 
 - a privacy and oversight notice;
 - the 720p replay, where clicking any R1–R8 timeline span or card seeks the video;
 - the interactive 3D twin, synced to the replay;
 - an inbox-style incident view: a triaged list, and a detail panel with the evidence clip, the "why it fired" trace, the facts and the recommended action;
 - review buttons on each incident (real / false alarm with a reason / unsure). *Export review* saves them, and `tools/review_incidents.py --import` turns them into precision per rule;
+- the risk register, a 5×5 matrix and the chat (offline it answers the suggested questions from the register; hosted, it answers anything about the run);
 - leading indicators, with an exposure chart, brief exposures, closest approaches and the hotspot map;
 - rule coverage;
 - camera calibration;
@@ -174,6 +179,17 @@ Demo clip assignments are frozen in `evaluation/demo_inventory.yaml`.
 Or: `./run.sh status`
 
 Copy `.env.example` to `.env` if you later enable Gemini scene bootstrap. The pipeline must still work with that key unset.
+
+## Hosted demo
+
+The public demo runs on free tiers only: Render (Docker web service), a Hugging Face dataset for run bundles, the Gemini API for the chatbot, and Supabase for chat logs and reviews. Processing stays on the GPU workstation; finished runs are published with `tools/publish_run.py`, which refuses any run without face pixelation.
+
+```bash
+uv sync --extra serve
+SAFETY_RUNS_DIR=output SAFETY_LLM_PROVIDER=ollama uv run uvicorn app.cloud:app --port 8080   # local
+```
+
+The architecture, the filled-in Section 11 table, step-by-step deployment and the shutdown plan are in [docs/deploy/cloud.md](docs/deploy/cloud.md).
 
 ## Data
 

@@ -1,0 +1,24 @@
+# Only source and the staged runs/ go into the image.
+.git
+.github
+.venv
+.cursor
+**/__pycache__
+*.pyc
+.env
+.env.*
+data
+output
+artifacts
+models
+llm/adapters
+llm/corpus
+llm/eval
+llm/teacher
+evaluation/labels
+evaluation/results
+tests
+docs
+packaging
+*.mp4
+!runs/**/*.mp4

@@ -1,0 +1,29 @@
+# Render Blueprint for the hosted demo (free plan, no payment method needed).
+# Render > New > Blueprint > pick this repo; it asks for every `sync: false` value.
+# Full walkthrough and the Section 11 table: docs/deploy/cloud.md
+services:
+  - type: web
+    name: safety-twin
+    runtime: docker
+    plan: free
+    region: singapore  # nearest to India; cannot be changed later
+    branch: feat/cv-pipeline
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    autoDeployTrigger: checksPass  # deploy only after GitHub Actions CI passes
+    envVars:
+      - key: SAFETY_RUNS_REPO  # Hugging Face dataset with published runs
+        sync: false
+      - key: HF_TOKEN  # read-only token, needed because the dataset is private
+        sync: false
+      - key: SAFETY_LLM_PROVIDER
+        value: gemini
+      - key: SAFETY_LLM_API_KEY  # Google AI Studio key (free tier)
+        sync: false
+      - key: SAFETY_CHAT_PER_MINUTE
+        value: "8"
+      - key: SUPABASE_URL  # optional: chat logs and reviews
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
