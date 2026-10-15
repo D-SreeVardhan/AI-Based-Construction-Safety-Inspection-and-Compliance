@@ -121,32 +121,50 @@ def main() -> None:
     )
     parser.add_argument("--corpus", type=Path, default=Path("data/working/narration"))
     parser.add_argument("--out", type=Path, default=Path("evaluation/results/narration_eval.json"))
+    parser.add_argument(
+        "--few-shot-limit",
+        type=int,
+        default=60,
+        help="examples per split for the 4-shot base arm (its ~1.5k-token prompts are slow "
+        "to prefill in fp16 on a GPU without tensor cores); every other arm runs in full",
+    )
     args = parser.parse_args()
 
     tokenizer = AutoTokenizer.from_pretrained(args.base)
     base = AutoModelForCausalLM.from_pretrained(args.base, dtype=torch.float16).to("cuda:0").eval()
     model = PeftModel.from_pretrained(base, args.adapter).eval()
     examples = load_split(args.corpus, "train")[:FEW_SHOT]
-    report: dict = {"arms": {}, "samples": {}, "promotion_gate": PROMOTION}
+    report: dict = {
+        "arms": {},
+        "samples": {},
+        "promotion_gate": PROMOTION,
+        "notes": {
+            "base_0shot": "same system prompt and facts as the LoRA arm, adapter disabled",
+            "base_4shot": f"first {args.few_shot_limit} examples per split only (compute budget)",
+        },
+    }
 
     for split in ("test", "holdout"):
         rows = load_split(args.corpus, split)
         facts = [f for f, _ in rows]
+        few = rows[: args.few_shot_limit]
         template = [template_narration(f).model_dump_json() for f in facts]
-        with model.disable_adapter():
-            base_out, base_speed = generate(
-                model, tokenizer, [few_shot_messages(f, examples) for f in facts]
-            )
         lora_out, lora_speed = generate(model, tokenizer, [chat_messages(f) for f in facts])
-        for arm, outputs, speed in (
-            ("template", template, None),
-            ("base_4shot", base_out, base_speed),
-            ("lora", lora_out, lora_speed),
+        with model.disable_adapter():
+            zero_out, zero_speed = generate(model, tokenizer, [chat_messages(f) for f in facts])
+            four_out, four_speed = generate(
+                model, tokenizer, [few_shot_messages(f, examples) for f, _ in few]
+            )
+        for arm, outputs, arm_rows, speed in (
+            ("template", template, rows, None),
+            ("base_0shot", zero_out, rows, zero_speed),
+            ("base_4shot", four_out, few, four_speed),
+            ("lora", lora_out, rows, lora_speed),
         ):
-            report["arms"].setdefault(arm, {})[split] = {**score(outputs, rows), "speed": speed}
+            report["arms"].setdefault(arm, {})[split] = {**score(outputs, arm_rows), "speed": speed}
             report["samples"].setdefault(arm, {})[split] = [
                 {"facts": f.model_dump(exclude_none=True), "output": o}
-                for f, o in list(zip(facts, outputs, strict=True))[:4]
+                for (f, _), o in list(zip(arm_rows, outputs, strict=True))[:4]
             ]
         print(
             json.dumps({arm: report["arms"][arm][split] for arm in report["arms"]}, indent=1),

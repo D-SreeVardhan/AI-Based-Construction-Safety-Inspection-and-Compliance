@@ -29,7 +29,6 @@ on local disk (not OneDrive) so a rerun skips it.
 from __future__ import annotations
 
 import argparse
-import copy
 import hashlib
 import json
 import math
@@ -75,24 +74,24 @@ def cache_features(model, examples, device: str) -> list[torch.Tensor]:
     return features
 
 
+def keep_layers(model, start: int, stop: int) -> None:
+    """Keep only decoder layers [start, stop) of `model`, in place: no copy of the weights."""
+    model.model.layers = torch.nn.ModuleList(list(model.model.layers)[start:stop])
+    model.config.num_hidden_layers = stop - start
+    for index, layer in enumerate(model.model.layers):
+        layer.self_attn.layer_idx = index  # KV-cache slot, sized by num_hidden_layers
+    if getattr(model.config, "layer_types", None):
+        model.config.layer_types = list(model.config.layer_types)[start:stop]
+
+
 def top_model(full, layers: int):
-    """Stage B's model: the top layers, final norm and head of `full`, fed embeddings."""
-    offset = layers - TOP_LAYERS
-    config = copy.deepcopy(full.config)
-    config.num_hidden_layers = TOP_LAYERS
-    if getattr(config, "layer_types", None):
-        config.layer_types = config.layer_types[offset:]
-    top = type(full)(config)
-    state = {}
-    for key, value in full.state_dict().items():
-        if key.startswith("model.layers."):
-            index = int(key.split(".")[2])
-            if index < offset:
-                continue
-            key = key.replace(f"model.layers.{index}.", f"model.layers.{index - offset}.", 1)
-        state[key] = value
-    top.load_state_dict(state, strict=True)
-    return top
+    """Stage B's model: `full` cut down, in place, to its top layers, final norm and head.
+
+    Fed the cached output of the bottom layers as `inputs_embeds`, it computes exactly
+    what the full model computes (see tests/unit/test_train_lora.py).
+    """
+    keep_layers(full, layers - TOP_LAYERS, layers)
+    return full
 
 
 def answer_loss(model, features, labels) -> torch.Tensor:
@@ -186,8 +185,13 @@ def main() -> None:
     device = "cuda:0"
     started = time.perf_counter()
     tokenizer = AutoTokenizer.from_pretrained(args.base)
-    full = AutoModelForCausalLM.from_pretrained(args.base, dtype=torch.float32)
+    # The checkpoint is bf16: loading it as bf16 is lossless and halves host RAM (3.1 GB
+    # instead of 6.2); each stage converts its own slice to fp32 on the GPU.
+    full = AutoModelForCausalLM.from_pretrained(args.base, dtype=torch.bfloat16)
     layers = full.config.num_hidden_layers
+    offset = layers - TOP_LAYERS
+    every_layer = list(full.model.layers)
+    layer_types = list(getattr(full.config, "layer_types", None) or [])
     train = [encode(tokenizer, f, r, args.max_length) for f, r in load_split(args.corpus, "train")]
     val = [encode(tokenizer, f, r, args.max_length) for f, r in load_split(args.corpus, "val")]
 
@@ -197,15 +201,12 @@ def main() -> None:
         train_features, val_features = torch.load(cache)
         print(f"loaded cached features from {cache}", flush=True)
     else:
-        bottom = copy.deepcopy(full)
-        bottom.model.layers = bottom.model.layers[: layers - TOP_LAYERS]
-        bottom.model.norm = torch.nn.Identity()
-        bottom.lm_head = torch.nn.Identity()
-        bottom.to(device).eval()
-        train_features = cache_features(bottom, train, device)
-        val_features = cache_features(bottom, val, device)
-        del bottom
-        torch.cuda.empty_cache()
+        keep_layers(full, 0, offset)
+        norm, full.model.norm = full.model.norm, torch.nn.Identity()
+        full.model.to(device, torch.float32).eval()
+        train_features = cache_features(full, train, device)
+        val_features = cache_features(full, val, device)
+        full.model.norm = norm
         cache.parent.mkdir(parents=True, exist_ok=True)
         torch.save((train_features, val_features), cache)
     cached = time.perf_counter() - started
@@ -214,9 +215,14 @@ def main() -> None:
         flush=True,
     )
 
-    # Stage B: LoRA on the top of the model, in fp32.
+    # Stage B: LoRA on the top of the model, in fp32. The bottom layers are dropped.
+    full.model.layers = torch.nn.ModuleList(every_layer)
+    full.config.num_hidden_layers = layers
+    if layer_types:
+        full.config.layer_types = layer_types
+    del every_layer
     model = top_model(full, layers)
-    del full
+    torch.cuda.empty_cache()
     model.config.use_cache = False
     model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     config = LoraConfig(
@@ -227,7 +233,7 @@ def main() -> None:
         layers_to_transform=list(range(TOP_LAYERS)),
         task_type="CAUSAL_LM",
     )
-    model = get_peft_model(model, config).to(device)
+    model = get_peft_model(model, config).to(device, torch.float32)
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     share = 100 * trainable / FULL_MODEL_PARAMETERS
     print(f"trainable {trainable:,} ({share:.4f} % of the full model)", flush=True)

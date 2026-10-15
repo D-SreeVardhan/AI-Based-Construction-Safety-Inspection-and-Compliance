@@ -63,7 +63,7 @@ def _lora():
 def test_top_model_on_cached_features_matches_the_full_model(full) -> None:
     ids = torch.randint(0, 97, (2, 12))
     features = _bottom_features(full, ids)
-    top = top_model(full, LAYERS).eval()
+    top = top_model(copy.deepcopy(full), LAYERS).eval()
     with torch.no_grad():
         expected = full(input_ids=ids).logits
         actual = top.lm_head(top.model(inputs_embeds=features).last_hidden_state)
@@ -78,7 +78,7 @@ def test_checkpointing_does_not_change_the_loss_or_gradients(full) -> None:
     results = []
     for checkpointing in (False, True):
         torch.manual_seed(1)
-        top = top_model(full, LAYERS)
+        top = top_model(copy.deepcopy(full), LAYERS)
         top.config.use_cache = False
         if checkpointing:
             top.gradient_checkpointing_enable(
@@ -102,7 +102,7 @@ def test_checkpointing_does_not_change_the_loss_or_gradients(full) -> None:
 def test_remapped_adapter_loads_onto_the_full_model(full, tmp_path) -> None:
     ids = torch.randint(0, 97, (1, 10))
     torch.manual_seed(2)
-    trained = get_peft_model(top_model(full, LAYERS), _lora()).eval()
+    trained = get_peft_model(top_model(copy.deepcopy(full), LAYERS), _lora()).eval()
     trained.save_pretrained(tmp_path)
     remap_adapter(tmp_path, LAYERS - TOP_LAYERS)
     loaded = PeftModel.from_pretrained(copy.deepcopy(full), tmp_path).eval()
