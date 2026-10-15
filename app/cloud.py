@@ -178,16 +178,17 @@ def supabase_insert(table: str, row: dict[str, Any]) -> None:
     if not url or not key:
         return
 
+    # New secret keys (sb_secret_...) go only in `apikey`; legacy service_role keys are JWTs
+    # and also go in Authorization.
+    headers = {"apikey": key, "Content-Type": "application/json", "Prefer": "return=minimal"}
+    if key.startswith("eyJ"):
+        headers["Authorization"] = f"Bearer {key}"
+
     def send() -> None:
         request = urllib.request.Request(
             f"{url.rstrip('/')}/rest/v1/{table}",
             data=json.dumps(row).encode("utf-8"),
-            headers={
-                "apikey": key,
-                "Authorization": f"Bearer {key}",
-                "Content-Type": "application/json",
-                "Prefer": "return=minimal",
-            },
+            headers=headers,
             method="POST",
         )
         try:
