@@ -16,7 +16,15 @@ output/<run_id>/
   safety_twin.mp4        1920×1080 H.264 side-by-side
   safety_twin_720p.mp4   web proxy for the 720p player
   report.html            offline report
+  insights.json          InsightsFile (v3, optional): leading indicators
+  exposure_heatmap.jpg   where exposure happened, over the camera view (v3, optional)
+  site_view.jpg          the camera view with the configured zones and edges (v3, optional)
+  evidence/<id>.mp4      annotated clip around each incident (v3, optional)
 ```
+
+Exported media are privacy-filtered by default (`render.privacy: faces`): workers' face
+bands are pixelated in the video, evidence frames, crops and clips. Hard hats stay
+visible. The pass-1 store keeps no imagery.
 
 Run `uv run safety-twin process <clip> --skip-video` to get a schema-complete bundle from the
 synthetic pipeline today; the real pipeline writes the same files.
@@ -48,6 +56,26 @@ catalogue's. The narrator step also records `model_ids.narrator`,
 `prompt_versions.narration` and `diagnostics.narration` (model vs template counts, failed
 checks, seconds) in the manifest.
 
+### v3 incident fields
+
+| Field | Meaning |
+|---|---|
+| `trace` | Why it fired. Points `{t, state: holds/clear/unknown, value, lower, upper}` from 2 s before onset to 2 s after resolution, thinned to about 5 per second (state changes always kept). `metric` is `confidence` (R1/R2), `distance_wh` (R4/R5) or `state`. `debounce_s` is the rule's debounce. `observed_fraction` is the share of the episode the subject was visible |
+| `evidence_quality` | `strong` (visible at least 80 %, at least 2× debounce, confident), `weak` (visible under 50 %, or confidence within the adjudication margin of the floor), otherwise `moderate`. The UI puts weak incidents under "verify first" |
+| `evidence_clip_path` | `evidence/<id>.mp4`: the annotated source pane from 2 s before to 2 s after, at most 12 s, 480 px tall |
+
+## Leading indicators (`insights.json`)
+
+| Field | Meaning |
+|---|---|
+| `exposure[]` | Per rule: `exposure_s` (worker-seconds with the hazard condition holding, confirmed or not), `workers_exposed`, `brief_exposures`, `confirmed_incidents` |
+| `brief_exposures[]` | The condition held for at least 0.25 s but less than the debounce. Has rule, worker, start/end, zone or machine, and the closest distance interval (R4/R5) |
+| `closest_approaches[]` | Smallest worker-to-machine (R4) or worker-to-edge (R5) distance per pair, with its interval and band, whether or not it alerted |
+| `area_exposure[]` | Exposure per zone or edge, with its label and the number of workers |
+| `top_workers[]` | The ten track IDs with the most exposure, split by rule. These are per-clip IDs, not identities |
+| `heatmap_path` | `exposure_heatmap.jpg`, if any exposure happened |
+| `zone_health` | `{proposal_id: change}`, 0 = unchanged and 1 = different, comparing the area with the frame the zone was drawn on. Values of 0.5 and above also raise a manifest warning |
+
 ## Diagnostics worth reading (`run_manifest.json → diagnostics`)
 
 | Key | Meaning |
@@ -56,6 +84,7 @@ checks, seconds) in the manifest.
 | `geometry_gate` | Whether distances are supported at all for this feed (residual camera drift in WH) |
 | `pass1_seconds` | Detector, tracker and PPE time; `hard_hat_overrides` counts PPE votes vetoed by a detected hard hat |
 | `narration` | See above |
+| `stitching` | `tracks_before`, `identities_after`, `links`. Person tracks re-linked across occlusions (motion, size and clothing colour must agree). Every `canonical_track_id` in the bundle is the identity: the first track of its chain |
 
 ## Rule coverage (`run_manifest.json → rule_coverage`)
 

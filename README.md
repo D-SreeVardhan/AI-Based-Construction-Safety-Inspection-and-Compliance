@@ -15,6 +15,29 @@ This is a heuristic triage tool, not a certified safety system and not legal adv
 
 An optional LoRA-tuned narrator (Qwen2.5-1.5B) rewrites incident text behind an eight-check guardrail. When a rule cannot be judged it reports `unsupported` or `inconclusive` with the reason, never a fake verdict.
 
+### What v3 adds
+
+v3 is built against what commercial site-safety analytics and open-source projects commonly miss. The comparison and its sources are in [docs/benchmark/industry-comparison.md](docs/benchmark/industry-comparison.md).
+
+- **Leading indicators**, not just incident counts (`insights.json`):
+  - exposure in worker-seconds per rule, zone and worker;
+  - brief exposures (near-misses that never reached the alert threshold);
+  - closest machine approaches;
+  - an exposure hotspot map.
+- **One worker, one identity.** When a worker is hidden longer than the tracker's memory, they reappear under a new ID. Stitching re-links tracks whose motion, size and clothing colour agree. On SARD 9 it turns 192 track IDs into 146 identities, and 34 incidents become 25.
+- **Explainable, triaged alerts.** Every incident carries a decision trace ("why it fired": condition, signal, debounce, visibility) and an evidence grade (strong / moderate / weak). The report puts *Act now* before *Verify first*, which counters alert fatigue.
+- **Evidence clips.** Each incident gets a short annotated clip that plays in its report card.
+- **Privacy by default.**
+  - Workers' faces are pixelated in every exported frame, crop and clip; hard hats stay visible.
+  - No identity or biometrics are used, and track IDs are per clip.
+  - The report says what is and is not monitored, which supports the notice and oversight duties for workplace monitoring.
+- **Zone health.** Each run checks whether the site has visibly changed where a zone was drawn, and flags stale zones for review.
+- **Re-evaluate the past.** `safety-twin reprocess output/<run>` re-runs geometry, rules and rendering on stored detections, with new zones or settings and no GPU.
+- **Faster.**
+  - The detector runs on every 2nd frame, with tracks interpolated offline in between.
+  - The 3D twin renders in a parallel process.
+  - Intake samples keyframes instead of seeking.
+
 Full specification: [`docs/plan/construction-safety-2.5d-twin-plan-v7.md`](docs/plan/construction-safety-2.5d-twin-plan-v7.md)
 
 ## Constraints
@@ -71,6 +94,7 @@ The `vision` extra pulls CUDA 12.8 PyTorch on Windows and the default wheels on 
 ```bash
 uv run safety-twin process path/to/clip.mp4                       # → output/<run_id>/
 uv run safety-twin process clip.mp4 --site config/sites/yard.json  # with zones/edges (R3, R5)
+uv run safety-twin reprocess output/<run_id> --site new_zones.json  # rules + render again, no detection
 uv run safety-twin process clip.mp4 --synthetic                    # week-1 placeholder, no models
 uv run safety-twin app                                             # local desk UI (synthetic)
 ```
@@ -87,7 +111,22 @@ Zones only apply to shots whose view still matches the frame they were drawn on.
 
 **Performance** (GTX 1660 Ti, i5-10300H, 173 s 1440p clip): 4m15s end to end with `yolo26l`. Encoding uses NVENC or Intel Quick Sync when available (`video_codec: auto`). Detector trade-offs: `uv run python tools/benchmark_stage1.py clip.mp4 --models yolo26m.pt yolo26l.pt yolo26x.pt`, results in `evaluation/results/`.
 
-**Report.** `report.html` is a single offline file. It holds the 720p replay, and clicking any R1–R5 timeline span or incident card seeks the video. Below that come incident cards with evidence crops, rule coverage (with a table view), camera calibration, and stage timings. It adapts to light and dark mode.
+**Report.** `report.html` is a single offline web page with a sidebar and five sections. It adapts to light and dark mode and contains:
+
+- a privacy and oversight notice;
+- the 720p replay, where clicking any R1–R5 timeline span or card seeks the video;
+- an inbox-style incident view: a triaged list, and a detail panel with the evidence clip, the "why it fired" trace, the facts and the recommended action;
+- review buttons on each incident (real / false alarm with a reason / unsure). *Export review* saves them, and `tools/review_incidents.py --import` turns them into precision per rule;
+- leading indicators, with an exposure chart, brief exposures, closest approaches and the hotspot map;
+- rule coverage;
+- camera calibration;
+- zone health;
+- stage timings.
+
+**Measuring accuracy.**
+- `uv run python tools/label_ppe.py output/<run>`: blind-label a fixed, stratified sample of 400 worker crops (about 20 min).
+- `uv run python -m evaluation.ppe_eval output/<run>`: PPE precision and recall by worker size.
+- `uv run python tools/review_incidents.py output/<run>`: mark each incident real or false alarm, giving precision per rule.
 
 **Incident narration (optional, L4 + L5).**
 
