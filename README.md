@@ -1,10 +1,38 @@
-# Construction Safety 2.5D Twin
+# Construction Safety Twin
 
-College project: drop a fixed-camera construction-site video, run offline processing, and get a side-by-side MP4 — annotated source on the left, an approximate 2.5D site twin on the right — with R1–R8 hazard cards, evidence frames, and a run report.
+**Live demo: https://safety-twin.onrender.com** · CS3235 Team 5, *AI-Based Construction Safety Inspection and Compliance*
 
-This is a heuristic triage tool, not a certified safety system and not legal advice. Distances are relative risk bands, not metres. The twin does not reconstruct hidden geometry or BIM.
+Drop in a fixed-camera construction-site video and get:
+- hazard incidents for eight rules, each with an evidence clip and a "why it fired" trace;
+- leading indicators;
+- an interactive 3D digital twin of the site;
+- a 5×5 risk register;
+- a chatbot that answers questions about the run and cites every fact it uses.
 
-**Status:** the offline pipeline runs end to end on real footage:
+This is a heuristic triage tool, not a certified safety system and not legal advice. Distances are relative risk bands in worker heights, not metres. The twin does not reconstruct hidden geometry or BIM.
+
+## At a glance (October 2026)
+
+| Area | State |
+|---|---|
+| Offline pipeline | Runs end to end on three real CCTV clips (SARD 7, 8, 9) at 1.1–2.0× real time on a GTX 1660 Ti |
+| Hazard rules | R1–R8: PPE, restricted zones, machinery, open edges, worker down, under a suspended load, fire or smoke |
+| Hosted demo | Live on free tiers: Render + Hugging Face + Gemini + Supabase. CI/CD deploys after tests pass; $0 a month |
+| Risk chatbot | Gemini 3.6 Flash, grounded in the run's facts. Every number and worker is checked against the facts its sentence cites; on the live site 6/6 test answers passed, median 4.7 s |
+| Incident narrator | Qwen2.5-1.5B LoRA, trained and evaluated against base 0-shot and 4-shot. Not promoted: 0.90 pass rate vs 0.93 for 4-shot on the test split. Guarded template text is shown instead |
+| Accuracy | Being measured, three ways: R7 on the SynthSite benchmark (227 labelled clips, against published baselines); incident precision and reviewer agreement (Cohen's kappa) from team review on the live site; PPE blind labels |
+
+```text
+video ─► intake ─► pass 1: detect (YOLOE-26l, every 2nd frame) · track (ByteTrack) · PPE · pose
+      ─► calibrate camera from workers ─► stitch identities ─► rules R1–R8 (debounce, inconclusive)
+      ─► insights · traces · evidence grades ─► pass 3: render (faces pixelated) · 3D twin · clips
+      ─► validated run bundle + report.html ─► LoRA narration behind a guardrail
+      ─► publish (privacy gate) ─► cloud app: gallery · reports · risk register · grounded chat
+```
+
+## Components
+
+The offline pipeline runs end to end on real footage:
 
 - **Detection**: open-vocabulary YOLOE-26l with a baked construction vocabulary (workers, hard hats, excavators, cranes, loaders, trucks, crane hooks, fire, smoke), plus yolo26n-pose to confirm a worker lying down.
 - **Tracking**: ByteTrack.
@@ -78,17 +106,17 @@ Full specification: [`docs/plan/construction-safety-2.5d-twin-plan-v7.md`](docs/
 ## Layout
 
 ```text
-app/           desktop entrypoints
-jobs/          background pipeline jobs
-pipeline/      intake, vision, scene, mapping, rules, render
+app/           desktop entrypoint and the hosted demo (app/cloud.py, FastAPI)
+jobs/          pipeline jobs: process, reprocess, analyse (rules without rendering)
+pipeline/      intake, vision, scene, mapping, rules, render, report, outputs (risk, facts)
 twin/          2.5D renderer
-shared/        config, coordinates, schemas
-llm/           optional fine-tuning experiment
-evaluation/    gates and reports
-tools/         dataset fetch, CCTV intake, profilers
-config/        runtime defaults
-data/          local datasets (gitignored)
-docs/plan/     v7 specification
+shared/        config, coordinates, schemas (the run-bundle contract)
+llm/           narrator (LoRA + guardrail) and the risk-assessment chatbot
+evaluation/    PPE, narration, team review and SynthSite benchmarks
+tools/         dataset fetch, labelling, publishing, profilers
+config/        runtime defaults, class map, site configs
+docs/          plan, run-bundle contract, industry comparison, cloud deployment
+Dockerfile, render.yaml, .github/workflows/   container, Render Blueprint, CI
 ```
 
 ## Setup
@@ -145,6 +173,8 @@ Zones only apply to shots whose view still matches the frame they were drawn on.
 - `uv run python tools/label_ppe.py output/<run>`: blind-label a fixed, stratified sample of 400 worker crops (about 20 min).
 - `uv run python -m evaluation.ppe_eval output/<run>`: PPE precision and recall by worker size.
 - `uv run python tools/review_incidents.py output/<run>`: mark each incident real or false alarm, giving precision per rule.
+- On the live site, reviewers mark incidents under their name. `uv run python -m evaluation.reviews output/<run>` then gives precision per rule from the majority verdict, and Cohen's kappa between reviewers.
+- `uv run --no-sync python -m evaluation.synthsite_eval`: R7 on the [SynthSite](https://huggingface.co/datasets/govtech/SynthSite) benchmark (227 clips labelled unsafe/safe), with P/R/F1/F2 and 95 % CIs, next to the dataset's YOLO-World and Grounding DINO results. Tuning is allowed on the fixed dev split only.
 
 **Incident narration (optional, L4 + L5).**
 
