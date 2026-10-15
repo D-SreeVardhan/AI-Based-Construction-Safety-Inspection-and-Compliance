@@ -46,7 +46,7 @@ the chatbot on its own.
 | **Domain & HTTPS** | `https://<service>.onrender.com` with a Render-managed TLS certificate; HTTP redirects to HTTPS. A custom domain is optional and also free on Render. |
 | **Monitoring / logging (LLMOps)** | One JSON log line per chat answer, in Render's log view and in Supabase `chat_logs`: answer source (`model` or `register`), model id, latency, tokens, which checks failed, citations, and a salted hash of the client. Live counters at `/api/stats`: model share, latency p50/p90, check failures. Supabase view `chat_daily` gives daily trends. Render health checks plus a free UptimeRobot monitor on `/healthz`. Guardrail outcomes are the quality metric: an answer that fails a check is never shown. |
 | **Estimated monthly cost** | **$0.** With no payment method on file, quota exhaustion means suspension or rate limits, never a bill. Light paid upgrade if ever needed: Render Starter ($7/month, no sleep). |
-| **Public demo URL** | `https://<service>.onrender.com`, filled in after the first deploy (step 4 below). |
+| **Public demo URL** | **https://safety-twin.onrender.com** (API docs at `/docs`, health at `/healthz`, chatbot monitoring at `/api/stats`). On the free plan the first visit after 15 idle minutes takes about a minute to wake. |
 
 ## Deployment steps
 

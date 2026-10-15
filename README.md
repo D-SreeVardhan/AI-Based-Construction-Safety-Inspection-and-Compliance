@@ -182,6 +182,8 @@ Copy `.env.example` to `.env` if you later enable Gemini scene bootstrap. The pi
 
 ## Hosted demo
 
+**Live: https://safety-twin.onrender.com**
+
 The public demo runs on free tiers only: Render (Docker web service), a Hugging Face dataset for run bundles, the Gemini API for the chatbot, and Supabase for chat logs and reviews. Processing stays on the GPU workstation; finished runs are published with `tools/publish_run.py`, which refuses any run without face pixelation.
 
 ```bash
