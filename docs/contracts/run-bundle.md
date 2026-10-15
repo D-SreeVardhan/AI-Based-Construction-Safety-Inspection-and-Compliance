@@ -7,7 +7,7 @@ queries it. Schemas live in [`shared/schemas/bundle.py`](../../shared/schemas/bu
 
 ```text
 output/<run_id>/
-  run_manifest.json      RunManifest       provenance, models, R1–R5 coverage, timings, warnings
+  run_manifest.json      RunManifest       provenance, models, R1–R8 coverage, timings, warnings
   incidents.json         IncidentsFile     confirmed incidents with catalogue-driven text
   tracks_summary.json    TracksSummaryFile per-track timelines (presence, PPE, zones, machinery bands)
   scene.json             SceneCache        restricted zones, edges, traffic zones used by R2/R3/R5
@@ -19,6 +19,7 @@ output/<run_id>/
   insights.json          InsightsFile (v3, optional): leading indicators
   exposure_heatmap.jpg   where exposure happened, over the camera view (v3, optional)
   site_view.jpg          the camera view with the configured zones and edges (v3, optional)
+  twin.json              worker paths, machines and zones in worker heights for the 3D viewer (v3, optional)
   evidence/<id>.mp4      annotated clip around each incident (v3, optional)
 ```
 
@@ -47,6 +48,7 @@ Each `IncidentRecord` is a *confirmed* alert (condition persisted past its debou
 | `resolution_reason` | `condition_cleared`, `evidence_lost`, `shot_boundary`, `end_of_clip` |
 | `observation_text`, `action_text` | Deterministic template text (the FR-7 fallback), written after the incident ended — states its full duration |
 | `distance`, `relative_band` | R4/R5 only: WH interval and band at the closest approach |
+| `object_id` | R2/R4: the machine. R7: the suspended load. R8: the fire or smoke track, which is also the incident's `canonical_track_id` (R8 has no worker subject) |
 | `helmet`, `vest` | Smoothed PPE state at the evidence frame |
 | `adjudication_candidate` | `true` → queue `evidence_crop_path` for L1 (PPE unknown or within 0.10 of the floor) |
 | `narration` | Optional (`null` until `safety-llm narrate <run_dir>` runs). `summary`, `caveat`, `action` plus `source`: `model` when the fine-tuned narrator's text passed all eight L5 checks, `template` when it fell back; `failed_checks` names the checks a rejected reply failed. Shown instead of `observation_text` only when `source` is `model` |
@@ -60,7 +62,7 @@ checks, seconds) in the manifest.
 
 | Field | Meaning |
 |---|---|
-| `trace` | Why it fired. Points `{t, state: holds/clear/unknown, value, lower, upper}` from 2 s before onset to 2 s after resolution, thinned to about 5 per second (state changes always kept). `metric` is `confidence` (R1/R2), `distance_wh` (R4/R5) or `state`. `debounce_s` is the rule's debounce. `observed_fraction` is the share of the episode the subject was visible |
+| `trace` | Why it fired. Points `{t, state: holds/clear/unknown, value, lower, upper}` from 2 s before onset to 2 s after resolution, thinned to about 5 per second (state changes always kept). `metric` is `confidence` (R1/R2/R7/R8), `distance_wh` (R4/R5) or `state` (R3/R6). `debounce_s` is the rule's debounce. `observed_fraction` is the share of the episode the subject was visible |
 | `evidence_quality` | `strong` (visible at least 80 %, at least 2× debounce, confident), `weak` (visible under 50 %, or confidence within the adjudication margin of the floor), otherwise `moderate`. The UI puts weak incidents under "verify first" |
 | `evidence_clip_path` | `evidence/<id>.mp4`: the annotated source pane from 2 s before to 2 s after, at most 12 s, 480 px tall |
 
@@ -86,9 +88,24 @@ checks, seconds) in the manifest.
 | `narration` | See above |
 | `stitching` | `tracks_before`, `identities_after`, `links`. Person tracks re-linked across occlusions (motion, size and clothing colour must agree). Every `canonical_track_id` in the bundle is the identity: the first track of its chain |
 
+## 3D twin data (`twin.json`)
+
+Written by `pipeline.output.twin_data.TwinRecorder` and read by the report's viewer. Positions
+are on the fitted ground plane in worker heights (x right of the camera, y away from it), the
+same frame as R3–R5 distances.
+
+| Field | Meaning |
+|---|---|
+| `version`, `units`, `duration` | Format version (1), the unit note, clip length in seconds |
+| `camera` | `height_wh`, `tilt_deg`, `roll_deg`, and `support`: the ground points the calibration saw (outside them positions are extrapolated) |
+| `rules` | Bit per rule for the `rules` masks: R1 = 1 … R8 = 128 |
+| `zones[]` | `id`, `label`, `type`, `line` (true for an open edge), `points` on the plane |
+| `workers[]` | `id` (the stitched identity), `label`, `segments[]`. A segment breaks where the worker was unseen for over 0.6 s. Each has `t[]` (5 Hz), `xy` (flat x, y pairs, Gaussian-smoothed with σ 0.4 s), `state` (one char per sample: 0 none, 1 pending, 2 alert), `rules[]` (bitmask of active rules), `helmet` (h / n / u), `ok` (1 when the point is inside the calibrated area) |
+| `machines[]` | `id`, `label`, `class`, `t[]`, `polygons[]` (footprint per sample), `state[]` (operating state) |
+
 ## Rule coverage (`run_manifest.json → rule_coverage`)
 
-Always exactly R1–R5, in order, even when a rule could not run. Each entry has a summary
+Always exactly R1–R8, in order, even when a rule could not run. Each entry has a summary
 `status`, a `reason_code`, `incident_count`, and `status_counts` (subject-frames per status),
 so "mostly inconclusive" is visible even when the summary says `evaluated_clear`.
 
@@ -102,7 +119,7 @@ so "mostly inconclusive" is visible even when the summary says `evaluated_clear`
 
 ## Rule semantics worth knowing
 
-- Timing is on video timestamps: R1/R2 debounce 1.5 s, R3–R5 1.0 s; a gap ≤ 0.25 s pauses the
+- Timing is on video timestamps: R1/R2 debounce 1.5 s, R3–R5 and R7 1.0 s, R8 2.0 s, R6 3.0 s; a gap ≤ 0.25 s pauses the
   debounce, longer resets it; 2.0 s of clear resolves; re-triggering within 30 s reopens the
   same incident instead of creating a duplicate.
 - **Inconclusive only when it matters:** a rule reports `inconclusive` only if the unknown could
@@ -110,3 +127,9 @@ so "mostly inconclusive" is visible even when the summary says `evaluated_clear`
   even when the machine's operating state is unknown; a stationary machine never alerts.
 - `unknown` PPE never counts as a negative, and a `no_helmet`/`no_vest` below the 0.70 floor is
   `inconclusive`, never `clear`.
+- **R6–R8 are heuristic or visual** (`basis` in the catalogue). R6 alerts only on `lying`;
+  a worker whose posture is unknown is `inconclusive`, never clear. R7 counts a detection as a
+  load only if it is not cut off by the top of the frame and is no taller than 2.2× its width,
+  which rejects crane masts. R8 alerts at confidence ≥ 0.45 and is `inconclusive` below it.
+- Feeds without the pose model or the hazard prompts report R6–R8 as `unsupported_for_feed`
+  (`FeedCapabilities.posture`, `FeedCapabilities.hazard_classes`).

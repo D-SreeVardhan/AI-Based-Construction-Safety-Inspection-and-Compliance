@@ -1,16 +1,16 @@
 # Construction Safety 2.5D Twin
 
-College project: drop a fixed-camera construction-site video, run offline processing, and get a side-by-side MP4 — annotated source on the left, an approximate 2.5D site twin on the right — with R1–R5 hazard cards, evidence frames, and a run report.
+College project: drop a fixed-camera construction-site video, run offline processing, and get a side-by-side MP4 — annotated source on the left, an approximate 2.5D site twin on the right — with R1–R8 hazard cards, evidence frames, and a run report.
 
 This is a heuristic triage tool, not a certified safety system and not legal advice. Distances are relative risk bands, not metres. The twin does not reconstruct hidden geometry or BIM.
 
 **Status:** the offline pipeline runs end to end on real footage:
 
-- **Detection**: open-vocabulary YOLOE-26l with a baked construction vocabulary (workers, hard hats, excavators, cranes, loaders, trucks).
+- **Detection**: open-vocabulary YOLOE-26l with a baked construction vocabulary (workers, hard hats, excavators, cranes, loaders, trucks, crane hooks, fire, smoke), plus yolo26n-pose to confirm a worker lying down.
 - **Tracking**: ByteTrack.
 - **PPE (R1/R2)**: a two-head EfficientNet-B0 classifier, temperature-calibrated, smoothed per track, with a detected hard hat able to veto a "no helmet".
 - **Camera calibration**: fitted from the workers themselves, giving R3–R5 distances in worker heights with bootstrap intervals.
-- **Rules**: the R1–R5 engine.
+- **Rules**: the R1–R8 engine: PPE, zones, machinery, edges, a worker down, a worker under a suspended load, fire or smoke.
 - **Outputs**: a side-by-side MP4 with a live 3D site twin, an offline HTML report, and the [run bundle](docs/contracts/run-bundle.md).
 
 An optional LoRA-tuned narrator (Qwen2.5-1.5B) rewrites incident text behind an eight-check guardrail. When a rule cannot be judged it reports `unsupported` or `inconclusive` with the reason, never a fake verdict.
@@ -32,6 +32,15 @@ v3 is built against what commercial site-safety analytics and open-source projec
   - No identity or biometrics are used, and track IDs are per clip.
   - The report says what is and is not monitored, which supports the notice and oversight duties for workplace monitoring.
 - **Zone health.** Each run checks whether the site has visibly changed where a zone was drawn, and flags stale zones for review.
+- **Hazards beyond PPE.**
+  - R6 *possible worker down*: a worker lying on the ground for 3 s. The box shape nominates, a pose model confirms the body axis is near horizontal, so crouching over rebar does not count.
+  - R7 *worker under a suspended load*: a worker in the drop zone below a crane hook or hanging load. Masts and other tall, frame-cropped columns are rejected as loads.
+  - R8 *possible fire or smoke*: one incident per fire or smoke region, not one per worker.
+- **Interactive 3D twin in the report.** A Three.js view of the site in worker heights, synced to the video:
+  - click a worker to follow them and see their path, exposure and incidents;
+  - click a zone for its exposure;
+  - incident markers on the timeline, an exposure heat layer and a hazards-only filter;
+  - keyboard: Space, ←/→, 1/2/3 for camera presets, F to follow, Esc.
 - **Re-evaluate the past.** `safety-twin reprocess output/<run>` re-runs geometry, rules and rendering on stored detections, with new zones or settings and no GPU.
 - **Faster.**
   - The detector runs on every 2nd frame, with tracks interpolated offline in between.
@@ -58,6 +67,9 @@ Full specification: [`docs/plan/construction-safety-2.5d-twin-plan-v7.md`](docs/
 | R3 | Restricted-zone intrusion |
 | R4 | Approximate machinery proximity |
 | R5 | Possible missing fall protection near an elevated/open edge |
+| R6 | Possible worker down (lying on the ground) |
+| R7 | Worker under a suspended load |
+| R8 | Possible fire or smoke |
 
 ## Layout
 
@@ -109,12 +121,13 @@ uv run python tools/annotate_site.py clip.mp4 --camera yard-east --time 10
 
 Zones only apply to shots whose view still matches the frame they were drawn on.
 
-**Performance** (GTX 1660 Ti, i5-10300H, 173 s 1440p clip): 4m15s end to end with `yolo26l`. Encoding uses NVENC or Intel Quick Sync when available (`video_codec: auto`). Detector trade-offs: `uv run python tools/benchmark_stage1.py clip.mp4 --models yolo26m.pt yolo26l.pt yolo26x.pt`, results in `evaluation/results/`.
+**Performance** (GTX 1660 Ti, i5-10300H, 173 s 1440p clip, on mains power): 5m46s end to end with YOLOE-26l, the PPE classifier, pose, stitching, R1–R8, the 1080p video and the report, or 2.0× real time. On battery the GPU clocks down about 3×; the manifest warns when a run was timed on battery. Encoding uses NVENC or Intel Quick Sync when available (`video_codec: auto`). Detector trade-offs: `uv run python tools/benchmark_stage1.py clip.mp4 --models yolo26m.pt yolo26l.pt yolo26x.pt`, results in `evaluation/results/`.
 
-**Report.** `report.html` is a single offline web page with a sidebar and five sections. It adapts to light and dark mode and contains:
+**Report.** `report.html` is a single offline web page with a sidebar and six sections: Overview, Digital twin, Incidents, Leading indicators, Site & camera, Run details. It adapts to light and dark mode and contains:
 
 - a privacy and oversight notice;
-- the 720p replay, where clicking any R1–R5 timeline span or card seeks the video;
+- the 720p replay, where clicking any R1–R8 timeline span or card seeks the video;
+- the interactive 3D twin, synced to the replay;
 - an inbox-style incident view: a triaged list, and a detail panel with the evidence clip, the "why it fired" trace, the facts and the recommended action;
 - review buttons on each incident (real / false alarm with a reason / unsure). *Export review* saves them, and `tools/review_incidents.py --import` turns them into precision per rule;
 - leading indicators, with an exposure chart, brief exposures, closest approaches and the hotspot map;
