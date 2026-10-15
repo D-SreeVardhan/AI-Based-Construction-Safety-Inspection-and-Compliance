@@ -50,7 +50,8 @@ code { font-size:.86em; background:var(--surface-2); padding:1px 5px; border-rad
   text-decoration:none; font-weight:500; margin-bottom:2px; }
 .nav a:hover { background:var(--surface-2); color:var(--text); }
 .nav a[aria-current="page"] { background:var(--accent-soft); color:var(--accent); }
-.nav .ico { width:18px; text-align:center; opacity:.9; }
+.nav .ico { width:18px; height:18px; display:grid; place-items:center; opacity:.85; }
+.nav a[aria-current="page"] .ico { opacity:1; }
 .nav .count { margin-left:auto; font-size:.75rem; color:var(--text-3); background:var(--surface-2);
   border-radius:999px; padding:0 8px; }
 .sidebar .foot { margin:18px 10px 0; color:var(--text-3); font-size:.75rem; line-height:1.45; }

@@ -204,6 +204,34 @@ function label(text, color = '#ffffff', bg = 'rgba(17,22,29,0.88)', scale = 0.9)
   const hgt = 0.038 * scale; sprite.scale.set(hgt * w / 64, hgt, 1); sprite.renderOrder = 10; return sprite;
 }
 const camLabel = label('CCTV', '#ffffff', 'rgba(42,120,214,0.95)'); camLabel.position.set(0, camHeight + 0.45, 0); scene.add(camLabel);
+const fixedTags = [camLabel];
+// Labels never overlap: each frame, worker tags are placed first (nearest the camera first),
+// then zone and camera tags; a tag that would cover one already placed is lifted above it.
+// The lift moves the sprite's anchor (center.y), eased so tags glide instead of jumping.
+const tagPoint = new THREE.Vector3();
+function declutter() {
+  const W = host.clientWidth, H = host.clientHeight, e = camera.projectionMatrix.elements, placed = [];
+  const shown = workers.filter(w => w.tag && w.tag.visible).map(w => w.tag);
+  const boxes = [...shown, ...fixedTags.filter(t => t.visible)].map(tag => {
+    tagPoint.setFromMatrixPosition(tag.matrixWorld).project(camera);
+    return { tag, x: (tagPoint.x + 1) / 2 * W, y: (1 - tagPoint.y) / 2 * H, w: tag.scale.x * e[0] * W / 2,
+      h: tag.scale.y * e[5] * H / 2, fixed: !shown.includes(tag), behind: tagPoint.z > 1 };
+  }).filter(b => !b.behind);
+  boxes.sort((a, b) => (a.fixed - b.fixed) || (b.y - a.y));
+  for (const b of boxes) {
+    let lift = 0;
+    for (let pass = 0; pass < 8; pass++) {
+      const x0 = b.x - b.w / 2, x1 = b.x + b.w / 2, y0 = b.y - b.h / 2 - lift, y1 = b.y + b.h / 2 - lift;
+      const hit = placed.find(r => x0 < r.x1 + 3 && x1 > r.x0 - 3 && y0 < r.y1 + 3 && y1 > r.y0 - 3);
+      if (!hit) break;
+      lift = b.y + b.h / 2 - hit.y0 + 4;
+    }
+    placed.push({ x0: b.x - b.w / 2, x1: b.x + b.w / 2, y0: b.y - b.h / 2 - lift, y1: b.y + b.h / 2 - lift });
+    const target = 0.5 - lift / Math.max(b.h, 1);
+    b.tag.center.y += (target - b.tag.center.y) * (b.tag.userData.placed ? 0.25 : 1);
+    b.tag.userData.placed = true;
+  }
+}
 
 // ---- zones and edges
 function stripes() {
@@ -228,7 +256,7 @@ const zoneMeshes = [];
       drop.position.copy(a.clone().lerp(b, 0.5)).setY(-0.45); drop.lookAt(b.clone().setY(-0.45)); drop.rotateY(Math.PI / 2); zoneGroup.add(drop);
     }
     const tag = label('⚠ ' + zone.label, '#111', 'rgba(245,197,24,0.95)', 0.8); const m = pts[Math.floor(pts.length / 2)];
-    tag.position.copy(P(m[0], m[1], 0.9)); zoneGroup.add(tag);
+    tag.position.copy(P(m[0], m[1], 0.9)); zoneGroup.add(tag); fixedTags.push(tag);
     return;
   }
   const red = zone.type === 'restricted_zone' ? 0xd03b3b : zone.type === 'traffic_zone' ? 0xfab219 : 0x38c6e8;
@@ -239,7 +267,7 @@ const zoneMeshes = [];
   const edges = new THREE.LineSegments(new THREE.EdgesGeometry(vol.geometry), new THREE.LineBasicMaterial({ color: red, transparent: true, opacity: 0.9 }));
   edges.rotation.x = -Math.PI / 2; zoneGroup.add(edges);
   const cx = pts.reduce((a, p) => a + p[0], 0) / pts.length, cy = pts.reduce((a, p) => a + p[1], 0) / pts.length;
-  const tag = label('⛔ ' + zone.label, '#fff', 'rgba(208,59,59,0.95)', 0.8); tag.position.copy(P(cx, cy, 1.35)); zoneGroup.add(tag);
+  const tag = label('⛔ ' + zone.label, '#fff', 'rgba(208,59,59,0.95)', 0.8); tag.position.copy(P(cx, cy, 1.35)); zoneGroup.add(tag); fixedTags.push(tag);
 });
 
 // ---- workers
@@ -547,6 +575,7 @@ function frame(now) {
       }
     } else tip.style.display = 'none';
   }
+  scene.updateMatrixWorld(); declutter();
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }

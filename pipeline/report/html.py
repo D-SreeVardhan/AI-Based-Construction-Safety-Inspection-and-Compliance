@@ -63,13 +63,33 @@ FALSE_REASONS = (
     ("zone_or_distance", "Zone / distance wrong"),
 )
 MAX_SUBROWS = 4
+# 24x24 line icons (stroke = currentColor), drawn for this report.
+_ICON_PATHS = {
+    "overview": '<rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/>'
+    '<rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/>',
+    "twin": '<path d="M12 2.5 3.5 7v10L12 21.5 20.5 17V7z"/><path d="M3.5 7 12 11.5 20.5 7M12 11.5v10"/>',
+    "incidents": '<path d="M10.3 3.9 2.4 17.6A2 2 0 0 0 4.1 20.6h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/>'
+    '<path d="M12 9v4M12 17h.01"/>',
+    "indicators": '<path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/>',
+    "site": '<path d="M3 7h3l2-3h8l2 3h3v12H3z"/><circle cx="12" cy="13" r="3.5"/>',
+    "run": '<path d="M4 6h16M4 12h16M4 18h10"/>',
+}
+
+
+def icon(name: str) -> str:
+    return (
+        '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" '
+        f'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">{_ICON_PATHS[name]}</svg>'
+    )
+
+
 NAV = (
-    ("overview", "◧", "Overview"),
-    ("twin", "◈", "Digital twin"),
-    ("incidents", "⚠", "Incidents"),
-    ("indicators", "↗", "Leading indicators"),
-    ("site", "⌖", "Site & camera"),
-    ("run", "≡", "Run details"),
+    ("overview", "Overview"),
+    ("twin", "Digital twin"),
+    ("incidents", "Incidents"),
+    ("indicators", "Leading indicators"),
+    ("site", "Site & camera"),
+    ("run", "Run details"),
 )
 
 
@@ -503,6 +523,41 @@ themselves; distances are in worker heights (WH) with 95 % bootstrap intervals, 
 <th class="num">Observations</th><th class="num">Height error</th></tr></thead><tbody>{body}</tbody></table>"""
 
 
+CALIBRATION_FAILURES = {
+    "too_few_upright_people": "too few upright, fully visible workers to fit a ground plane",
+    "weak_inlier_support": "worker heights in the image did not agree on one ground plane",
+    "high_reprojection_error": "the fitted ground plane did not match the workers' heights",
+    "unstable_horizon": "the horizon moved too much between fits",
+    "implausible_focal_length": "the fit needed an implausible lens",
+    "bootstrap_unstable": "resampled fits disagreed too much",
+    "optimizer_failed": "the fit did not converge",
+}
+
+
+def _twin_unavailable(manifest: RunManifest) -> str:
+    """Why there is no twin, with the fit's own numbers, and what would help."""
+    reasons = []
+    for shot, fit in (manifest.diagnostics.get("camera_fits") or {}).items():
+        code = str(fit.get("reason_code", ""))
+        text = CALIBRATION_FAILURES.get(code, code.replace("_", " "))
+        ratio, seen = fit.get("inlier_ratio"), fit.get("observations")
+        numbers = (
+            f" ({ratio:.0%} of {seen} observations from {fit.get('tracks', '?')} tracks agreed)"
+            if ratio is not None and seen
+            else ""
+        )
+        reasons.append(f"<li><b>{escape(shot)}</b>: {escape(text)}{escape(numbers)}.</li>")
+    found = "".join(reasons) or "<li>No calibration was attempted for this feed.</li>"
+    return f"""<p class="sub small" style="margin-bottom:10px">The twin places workers on a ground plane
+fitted from their own height in the image. Without an accepted fit there is no trustworthy
+position, so no twin is drawn rather than a misleading one. R1–R3 and R6–R8 do not need it;
+R4 and R5 distances do.</p>
+<ul class="clean">{found}</ul>
+<p class="sub small" style="margin-top:10px">This usually means workers' feet were hidden (rebar,
+formwork, the frame edge) or few people stood upright in view. A longer clip with more people
+walking in the open, or a camera view with less occlusion, gives the fit what it needs.</p>"""
+
+
 def peak_workers(tracks: TracksSummaryFile) -> int:
     """Most workers simultaneously in view (track IDs fragment, so a count of IDs overstates)."""
     events = sorted(
@@ -540,6 +595,7 @@ def render_report(
     )
     video = manifest.output_artifacts.get("video_proxy") or manifest.output_artifacts.get("video")
     processing = sum(t.duration_s for t in manifest.pass_timings)
+    reused_from = manifest.diagnostics.get("reused_from")
     groups = Counter(v3.group(i) for i in incidents)
     exposure = sum(e.exposure_s for e in insights.exposure) if insights else None
     person_tracks = (
@@ -563,9 +619,11 @@ def render_report(
                 person_tracks,
             ),
             (
-                "Processing",
+                "Reprocessed" if reused_from else "Processing",
                 f"{processing:.0f} s",
-                f"{processing / max(duration, 1e-6):.1f}× real time for {duration:.0f} s of video",
+                f"rules and render only; detections from {reused_from}"
+                if reused_from
+                else f"{processing / max(duration, 1e-6):.1f}× real time for {duration:.0f} s of video",
             ),
         ]
     )
@@ -640,10 +698,10 @@ def render_report(
 
     nav_counts = {"incidents": str(len(incidents))}
     nav = "".join(
-        f'<a href="#{key}" data-page="{key}"><span class="ico" aria-hidden="true">{icon}</span>{label}'
+        f'<a href="#{key}" data-page="{key}"><span class="ico" aria-hidden="true">{icon(key)}</span>{label}'
         + (f'<span class="count">{nav_counts[key]}</span>' if key in nav_counts else "")
         + "</a>"
-        for key, icon, label in NAV
+        for key, label in NAV
     )
     downloads = "".join(
         f'<a class="btn" href="{escape(path)}" download>{escape(label)}</a>'
@@ -677,7 +735,7 @@ def render_report(
     else:
         twin_page = _page_head(
             "Digital twin", "Not available: the camera could not be calibrated for this clip."
-        )
+        ) + _card("Why, and what would fix it", _twin_unavailable(manifest))
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">

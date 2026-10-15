@@ -176,6 +176,7 @@ class ProcessJob:
         self.model_ids: dict[str, str] = {}
         self.plane_fits: dict[str, PlaneFit] = {}
         self.on_battery = False
+        self.reused_from: str | None = None
         self.keyframes: list[np.ndarray] = []
         self.zone_health: dict[str, float] = {}
         self.stitching: dict[str, int] = {}
@@ -347,6 +348,7 @@ class ProcessJob:
             )
         self.warnings += store.meta("source_warnings", [])
         self.warnings.append(f"detections reused from run {previous.run_id} (reprocess)")
+        self.reused_from = previous.run_id
         self.report(f"pass 1 reused from {previous.run_id}: {pass1.frames} frames")
         return store, pass1, stage1_id, bool(ppe_id)
 
@@ -655,6 +657,7 @@ class ProcessJob:
             diagnostics={
                 "camera_mode": mode.value,
                 "on_battery": self.on_battery,
+                "reused_from": self.reused_from,
                 "privacy": self.config.render.privacy,
                 "drift_peak_px": drift.peak_displacement_px,
                 "drift_peak_fraction": drift.peak_fraction,
