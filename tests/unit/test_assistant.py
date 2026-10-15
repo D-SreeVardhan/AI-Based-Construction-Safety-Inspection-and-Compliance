@@ -100,6 +100,9 @@ def test_claims_must_be_in_the_facts_they_cite(bundle: RunBundle) -> None:
     assert any(f.startswith("citations") for f in check_answer("See [I-99].", shown))
     assert any(f.startswith("pronouns") for f in check_answer("He was there [RUN].", shown))
     assert any(f.startswith("verdicts") for f in check_answer("A clear violation [RUN].", shown))
+    # An id written out as text is not a number claim (live demo: "**Incident I-03:**")
+    bare = f"- **Incident {incident.id}:** worker {worker} had one incident [{incident.id}]."
+    assert check_answer(bare, shown) == []
 
 
 def test_register_answers_pass_the_same_checks(bundle: RunBundle) -> None:
@@ -204,4 +207,5 @@ def test_overloaded_models_fall_back_and_bad_keys_fail_fast(
     assert tried == ["badkey"]  # a bad key is not retried on another model
     gemini = from_env({"SAFETY_LLM_PROVIDER": "gemini", "SAFETY_LLM_API_KEY": "k"})
     assert gemini is not None
-    assert gemini.fallback_models == ("gemini-3.6-flash", "gemini-2.5-flash")
+    assert gemini.model == "gemini-3.6-flash"
+    assert gemini.fallback_models == ("gemini-2.5-flash", "gemini-3.8-flash")

@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from llm.narration import OUTPUT_KEYS, Narration, NarrationFacts
 
 MAX_FIELD_CHARS = 260
-NUMBER = re.compile(r"(?<![A-Za-z])\d+(?:\.\d+)?")
+NUMBER = re.compile(r"(?<![A-Za-z\d.])\d+(?:\.\d+)?")  # never starts inside a number or id
 ID_MENTION = re.compile(r"\b(worker|machine|vehicle|machinery|track)\s*#?\s*(\d+)", re.I)
 CITATION = re.compile(
     r"\b(rule|rules|section|sections|sub-?section|clause|act|regulation|bocw|article|"

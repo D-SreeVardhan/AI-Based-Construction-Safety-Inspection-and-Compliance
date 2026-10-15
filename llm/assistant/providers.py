@@ -25,8 +25,9 @@ from dataclasses import dataclass
 
 PRESETS: dict[str, tuple[str, str]] = {
     # provider: (base URL, default model). Model names change; SAFETY_LLM_MODEL overrides.
-    # Gemini 3.8 Flash is on the free tier (ai.google.dev/gemini-api/docs/pricing, Oct 2026).
-    "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.8-flash"),
+    # Free-tier Flash models (ai.google.dev/gemini-api/docs/pricing, Oct 2026). On the live
+    # demo 3.6 answered in ~2 s while 3.8 took ~17 s or returned "high demand" 503s.
+    "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.6-flash"),
     "groq": ("https://api.groq.com/openai/v1", "llama-3.3-70b-versatile"),
     "openrouter": ("https://openrouter.ai/api/v1", "meta-llama/llama-3.3-70b-instruct:free"),
     "hf": ("https://router.huggingface.co/v1", "Qwen/Qwen2.5-72B-Instruct"),
@@ -37,7 +38,7 @@ PRESETS: dict[str, tuple[str, str]] = {
 # models cannot turn thinking off, so the least that grounded Q&A needs ("low").
 DEFAULT_REASONING = {"ollama": "none", "gemini": "low"}
 # Backup models on the same free tier, for when the main one returns "high demand".
-DEFAULT_FALLBACKS = {"gemini": ("gemini-3.6-flash", "gemini-2.5-flash")}
+DEFAULT_FALLBACKS = {"gemini": ("gemini-2.5-flash", "gemini-3.8-flash")}
 TRANSIENT_HTTP = {408, 429, 500, 502, 503, 504}
 
 

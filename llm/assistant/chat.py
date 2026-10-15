@@ -34,7 +34,8 @@ MAX_HISTORY = 6
 CITATION = re.compile(
     r"\[([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)?(?:\s*,\s*[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)?)*)\]"
 )
-NUMBER = re.compile(r"(?<![A-Za-z\-])\d+(?:\.\d+)?")
+# Never starts inside a number or an id: "I-03" and "R12" contain no claim.
+NUMBER = re.compile(r"(?<![A-Za-z\-\d.])\d+(?:\.\d+)?")
 LIST_MARKER = re.compile(r"^\s*\d+[.)]\s", re.M)
 NEGATION = re.compile(r"\b(no|not|none|never|nothing|neither)\b", re.I)
 WORKERS = re.compile(r"\bworkers?\s+(#?\d+(?:\s*(?:,|and|&|or)\s*#?\d+)*)", re.I)
