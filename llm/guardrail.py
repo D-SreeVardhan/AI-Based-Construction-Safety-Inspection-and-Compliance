@@ -4,13 +4,18 @@ No model is involved. An output that fails any check is discarded and the determ
 template is shown instead; the failure is logged with the check that caught it.
 
     1 shape          valid JSON object, exactly the three string fields, one sentence each
-    2 numbers        every number appears in the facts (after rounding to one decimal)
+    2 numbers        every number appears in the facts (after rounding to one decimal),
+                     and a "from A s to B s" span ends at start + duration
     3 names          every worker/machine id mentioned is the one in the facts
     4 citations      no rule, section, act or clause references (the catalogue owns those)
     5 verdicts       no legal verdict language (violation, illegal, breach, ...)
     6 units          no metric distances: the system only knows worker heights
     7 action         the action keeps the catalogue action's subject and asks for a step
     8 tone           no certainty the evidence cannot carry, no downplaying the severity
+
+Before the checks, a zone or machine name the model copied with the wrong closing bracket
+(the 1.5B narrator writes "zone (synthetic]" about half the time) is restored to the
+exact text in the facts. Any bracket still unbalanced afterwards fails the shape check.
 """
 
 from __future__ import annotations
@@ -46,6 +51,9 @@ DOWNPLAY = re.compile(
     re.I,
 )
 IGNORE_ACTION = re.compile(r"\b(no action|nothing (needs|to do)|ignore|disregard)\b", re.I)
+SPAN = re.compile(r"from (\d+(?:\.\d+)?)\s*s\w*\s+(?:to|until|till)\s+(\d+(?:\.\d+)?)\s*s", re.I)
+BRACKETS = "()[]{}"
+PAIRS = {")": "(", "]": "[", "}": "{"}
 
 # What each rule's action must still be about, whatever the wording.
 ACTION_SUBJECT = {
@@ -69,6 +77,26 @@ class GuardrailResult:
     narration: Narration | None = None
 
 
+def restore_names(text: str, facts: NarrationFacts) -> str:
+    """Put back the exact zone/machine name where only its brackets were miscopied."""
+    for name in (facts.zone, facts.machine):
+        if not name or not any(c in name for c in BRACKETS):
+            continue
+        pattern = "".join("[][(){}]" if c in BRACKETS else re.escape(c) for c in name)
+        text = re.sub(pattern, lambda _, exact=name: exact, text)
+    return text
+
+
+def balanced(text: str) -> bool:
+    stack: list[str] = []
+    for c in text:
+        if c in "([{":
+            stack.append(c)
+        elif c in PAIRS and (not stack or stack.pop() != PAIRS[c]):
+            return False
+    return not stack
+
+
 def _sentences(text: str) -> int:
     return len([s for s in re.split(r"(?<=[.!?])\s+", text.strip()) if s])
 
@@ -80,6 +108,7 @@ def _fact_numbers(facts: NarrationFacts) -> set[str]:
             continue
         for token in NUMBER.findall(str(value)):
             numbers.add(_normalise(token))
+    numbers.add(_normalise(str(facts.start_s + facts.duration_s)))  # the end time
     return numbers
 
 
@@ -100,10 +129,13 @@ def check(raw: str, facts: NarrationFacts) -> GuardrailResult:
         return GuardrailResult(False, [f"shape: keys must be exactly {OUTPUT_KEYS}"])
     if not all(isinstance(payload[k], str) and payload[k].strip() for k in OUTPUT_KEYS):
         return GuardrailResult(False, ["shape: every field must be a non-empty string"])
+    payload = {k: restore_names(payload[k], facts) for k in OUTPUT_KEYS}
     for key in OUTPUT_KEYS:
         text = payload[key]
         if len(text) > MAX_FIELD_CHARS or _sentences(text) > 2:
             failures.append(f"shape: {key} must be one short sentence")
+        if not balanced(text):
+            failures.append(f"shape: {key} has unbalanced brackets")
     narration = Narration(**{k: payload[k].strip() for k in OUTPUT_KEYS})
     text = " ".join(payload[k] for k in OUTPUT_KEYS)
 
@@ -112,6 +144,10 @@ def check(raw: str, facts: NarrationFacts) -> GuardrailResult:
     for token in NUMBER.findall(text):
         if _normalise(token) not in allowed:
             failures.append(f"numbers: {token} is not in the facts")
+    for start, end in SPAN.findall(text):
+        # "from 0.4 s to 20.3 s" must end at start + duration, not quote the duration as the end
+        if abs(float(end) - (facts.start_s + facts.duration_s)) > 0.15:
+            failures.append(f"numbers: ends at {end} s, but {start} s + {facts.duration_s} s")
     # 3 names
     known = {facts.worker}
     if facts.machine:

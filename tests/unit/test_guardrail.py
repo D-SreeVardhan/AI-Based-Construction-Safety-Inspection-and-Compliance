@@ -74,3 +74,32 @@ def test_json_inside_code_fences_is_accepted() -> None:
 
 def test_numbers_from_the_facts_may_be_reformatted() -> None:
     assert check(corrupt(summary="Worker 53 was near machine 11 for 1.70 seconds."), FACTS).passed
+
+
+def test_a_miscopied_zone_bracket_is_restored_and_a_stray_one_fails() -> None:
+    facts = FACTS.model_copy(
+        update={
+            "rule_id": "R3",
+            "machine": None,
+            "zone": "Demo exclusion zone (synthetic)",
+            "action": "Stop entry and verify the exclusion boundary before resuming work.",
+        }
+    )
+    reply = {
+        "summary": "Worker 53 entered Demo exclusion zone (synthetic] for 1.7 seconds from 31.2 s.",
+        "caveat": "The position is estimated from one camera, so confirm the boundary.",
+        "action": "Have worker 53 leave the zone and check the barrier.",
+    }
+    result = check(json.dumps(reply), facts)
+    assert result.passed, result.failures
+    assert result.narration is not None
+    assert "zone (synthetic) for" in result.narration.summary
+    stray = check(json.dumps({**reply, "caveat": "Estimated (from one camera."}), facts)
+    assert stray.failures == ["shape: caveat has unbalanced brackets"]
+
+
+def test_a_span_must_end_at_start_plus_duration() -> None:
+    wrong = corrupt(summary="Worker 53 stayed near machine 11 from 31.2 s to 1.7 s.")
+    assert "numbers: ends at 1.7 s, but 31.2 s + 1.7 s" in check(wrong, FACTS).failures
+    right = corrupt(summary="Worker 53 stayed 0.4 to 0.6 WH from machine 11 from 31.2 s to 32.9 s.")
+    assert not [f for f in check(right, FACTS).failures if f.startswith("numbers")]
