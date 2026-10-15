@@ -1,11 +1,12 @@
 """Offline, self-contained HTML run report (v7 §4.4; v3 layout).
 
-One file, no network, no framework. A sticky top bar and a sidebar of five sections:
+One file, no network, no framework. A sticky top bar and a sidebar of seven sections:
 
 * Overview — headline numbers, the 720p replay with a per-rule timeline, top priorities;
 * Incidents — an inbox: the triaged list on the left, the selected incident on the right
   (evidence clip, why it fired, facts, action) with review buttons whose verdicts can be
   exported for `tools/review_incidents.py --import`;
+* Risk assessment — the 5×5 risk register and matrix, and the "Ask about this run" chat;
 * Leading indicators — exposure, brief exposures, hotspots;
 * Site & camera — zone health and calibration;
 * Run details — rule coverage, timings, models, warnings, privacy and oversight.
@@ -24,9 +25,12 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
+from pipeline.output.facts import build_facts
+from pipeline.output.run_bundle import RunBundle
 from pipeline.report import insights_html as v3
-from pipeline.report import twin_viewer
+from pipeline.report import risk_html, twin_viewer
 from pipeline.report.assets import SCRIPT, STYLE
+from pipeline.rules.catalogue import load_catalogue
 from shared.enums import RuleId, RuleStatus
 from shared.identity import display_track_label
 from shared.schemas.bundle import TracksSummaryFile
@@ -73,6 +77,7 @@ _ICON_PATHS = {
     "indicators": '<path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/>',
     "site": '<path d="M3 7h3l2-3h8l2 3h3v12H3z"/><circle cx="12" cy="13" r="3.5"/>',
     "run": '<path d="M4 6h16M4 12h16M4 18h10"/>',
+    "risk": '<path d="M12 3 4.5 6v6c0 4.4 3.2 8 7.5 9 4.3-1 7.5-4.6 7.5-9V6z"/><path d="m9 12 2 2 4-4"/>',
 }
 
 
@@ -87,6 +92,7 @@ NAV = (
     ("overview", "Overview"),
     ("twin", "Digital twin"),
     ("incidents", "Incidents"),
+    ("risk", "Risk assessment"),
     ("indicators", "Leading indicators"),
     ("site", "Site & camera"),
     ("run", "Run details"),
@@ -717,6 +723,25 @@ def render_report(
         f" · {completed} UTC"
     )
     incidents_page = _incidents_page(incidents, near_wh=near_wh, caution_wh=caution_wh)
+    bundle = RunBundle(
+        run_dir=Path("."),
+        manifest=manifest,
+        incidents=list(incidents),
+        insights=insights,
+        tracks=tracks,
+        zone_labels=dict(zone_labels or {}),
+        catalogue=load_catalogue(),
+    )
+    risk_page = risk_html.page(
+        bundle,
+        build_facts(bundle),
+        head=_page_head(
+            "Risk assessment",
+            "What this clip says about risk on site: each hazard rated likelihood × severity, "
+            "with controls in hierarchy-of-controls order. Ask about the run on the right.",
+        ),
+        card=_card,
+    )
     if twin is not None:
         twin_page = _page_head(
             "Digital twin",
@@ -739,7 +764,7 @@ def render_report(
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Site safety report</title><style>{STYLE}{twin_viewer.STYLE}</style></head>
+<title>Site safety report</title><style>{STYLE}{twin_viewer.STYLE}{risk_html.STYLE}</style></head>
 <body data-run="{escape(manifest.run_id)}">
 <header class="topbar"><div class="brand">ST</div>
 <div style="min-width:0"><div class="title">Site safety report</div><div class="meta">{meta}</div></div>
@@ -753,13 +778,14 @@ triage from video, not legal advice or certified measurement.</div></nav>
 <section class="page" id="page-overview">{overview}</section>
 <section class="page" id="page-twin">{twin_page}</section>
 <section class="page" id="page-incidents">{incidents_page}</section>
+<section class="page" id="page-risk">{risk_page}</section>
 <section class="page" id="page-indicators">{indicators}</section>
 <section class="page" id="page-site">{site}</section>
 <section class="page" id="page-run">{run}</section>
 </main></div>
 <div class="tooltip" id="tip" role="tooltip"></div>
 {'<script src="' + twin_viewer.THREE_ASSET + '"></script>' if twin is not None else ""}
-<script>{SCRIPT}{twin_viewer.SCRIPT if twin is not None else ""}</script></body></html>
+<script>{SCRIPT}{risk_html.SCRIPT}{twin_viewer.SCRIPT if twin is not None else ""}</script></body></html>
 """
 
 

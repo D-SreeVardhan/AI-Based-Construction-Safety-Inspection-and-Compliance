@@ -162,6 +162,31 @@ def test_report_escapes_every_text_field() -> None:
     assert "Worker 7 was repeatedly observed" in render_report(manifest, result.incidents)
 
 
+def test_risk_page_embeds_prepared_answers_safely() -> None:
+    import json
+    import re
+
+    from pipeline.output.facts import SUGGESTED
+
+    result = _incidents()
+    manifest = RunManifest(
+        run_id="run-risk",
+        status=ProcessingStatus.COMPLETED,
+        created_at="2026-09-27T00:00:00Z",
+        input_video=InputVideoMeta(path="clip.mp4", sha256="x", width=10, height=10),
+        rule_coverage=result.coverage,
+        warnings=("</script><script>alert(1)</script>",),
+    )
+    html = render_report(manifest, result.incidents)
+    assert 'id="page-risk"' in html and "Risk register" in html
+    block = re.search(r'<script type="application/json" id="chat-data">(.*?)</script>', html, re.S)
+    assert block is not None and "<" not in block.group(1)
+    data = json.loads(block.group(1))
+    assert set(data["prepared"]) == set(SUGGESTED)
+    assert all(answer["citations"] for answer in data["prepared"].values())
+    assert "LIMITS" in data["facts"] and "</script>" in data["facts"]["LIMITS"]
+
+
 def test_cards_never_state_the_future() -> None:
     [incident] = _incidents().incidents  # no helmet from 1.0 s to 3.0 s
     assert incident.title == "Apparent missing helmet"

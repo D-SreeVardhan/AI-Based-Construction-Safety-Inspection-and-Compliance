@@ -254,6 +254,7 @@ function select(id) {
   });
 }
 rows.forEach(r => r.addEventListener('click', () => select(r.dataset.id)));
+window.openIncident = id => { location.hash = 'incidents'; select(id); };
 $$('[data-open]').forEach(el => el.addEventListener('click', () => { location.hash = 'incidents'; select(el.dataset.open); }));
 let ruleFilter = 'all', groupFilter = 'all';
 function filter() {
@@ -302,6 +303,9 @@ $$('.review').forEach(box => $$('[data-verdict]', box).forEach(b => b.addEventLi
   if (b.dataset.reason) entry.reason = b.dataset.reason;
   verdicts[box.dataset.id] = entry;
   try { localStorage.setItem(key, JSON.stringify(verdicts)); } catch (e) {}
+  const api = document.querySelector('meta[name="safety-api"]');  // hosted: also store centrally
+  if (api) fetch(api.content + '/reviews', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ incident_id: box.dataset.id, ...entry }) }).catch(() => {});
   paint();
 })));
 const exportButton = $('#export-review');
