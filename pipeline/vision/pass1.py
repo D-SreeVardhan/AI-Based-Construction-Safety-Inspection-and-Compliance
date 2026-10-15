@@ -42,6 +42,8 @@ BORDER_MARGIN_PX = 4.0
 
 
 MOTION_SCALE = 0.25  # motion energy is measured on a quarter-size grey frame
+# Frames staged before one batched PPE pass: few large GPU calls beat many small ones.
+PPE_FLUSH_FRAMES = 16
 # A detected hard hat on the head is strong positive evidence; not seeing one is no evidence.
 HARD_HAT_HEAD = np.array([0.93, 0.05, 0.02])
 HEAD_REGION = 0.35  # top fraction of the person box where a worn hard hat sits
@@ -71,6 +73,7 @@ class _Staged:
     transform_valid: bool
     energy: dict[int, float]
     evidence: list[Detection]
+    interpolated: bool = False
 
 
 @dataclass
@@ -98,6 +101,54 @@ class Pass1Summary:
         if not self.stabilization_residuals_px:
             return None
         return float(np.percentile(self.stabilization_residuals_px, 95))
+
+
+def interpolate_tracks(
+    before: list[TrackedObject], after: list[TrackedObject], weight: float
+) -> list[TrackedObject]:
+    """Boxes for a frame between two detection frames: tracks seen on both, linearly."""
+    previous = {item.track_id: item.detection for item in before}
+    result = []
+    for item in after:
+        a = previous.get(item.track_id)
+        if a is None:
+            continue
+        b = item.detection
+        result.append(
+            TrackedObject(
+                track_id=item.track_id,
+                detection=Detection(
+                    x1=a.x1 + (b.x1 - a.x1) * weight,
+                    y1=a.y1 + (b.y1 - a.y1) * weight,
+                    x2=a.x2 + (b.x2 - a.x2) * weight,
+                    y2=a.y2 + (b.y2 - a.y2) * weight,
+                    confidence=min(a.confidence, b.confidence),
+                    class_name=b.class_name,
+                ),
+            )
+        )
+    return result
+
+
+def summary_from_store(store: Pass1Store) -> Pass1Summary:
+    """Rebuild what later passes need from a store written before summaries were saved.
+
+    Timings are unknown (zero) and the stabilisation residuals are not recoverable, so a
+    stabilised feed reuses as geometry-unsupported; fixed cameras lose nothing.
+    """
+    summary = Pass1Summary()
+    for record, observations in store.frames_with_observations():
+        summary.frames += 1
+        if not summary.shots or summary.shots[-1] != record.shot_id:
+            summary.shots.append(record.shot_id)
+        summary.detections += record.detection_count
+        summary.invalid_transform_frames += not record.transform_valid
+        summary.person_heights_px.extend(
+            o.box_reference.height()
+            for o in observations
+            if o.object_class == PERSON_CLASS and (o.confidence or 0.0) >= SCALE_MIN_CONFIDENCE
+        )
+    return summary
 
 
 class VisionPass:
@@ -132,82 +183,124 @@ class VisionPass:
         started = time.perf_counter()
         cuts = ShotCutDetector()
         shot_index = -1
-        matcher: ReferenceMatcher | None = None
-
-        staged: list[_Staged] = []
-        previous_grey: np.ndarray | None = None
+        self._staged: list[_Staged] = []
+        self._previous_grey: np.ndarray | None = None
+        self._matcher: ReferenceMatcher | None = None
+        # Non-detection frames wait here for the next detection frame, so their boxes
+        # can be interpolated between the two (pass one is offline: the future is known).
+        gap: list[DecodedFrame] = []
+        last_tracked: list[TrackedObject] = []
+        evidence_classes = set(self.config.stage1.evidence_classes)
         for frame, detections in self._detected(source, summary):
             cut = cuts.is_cut(frame.image)  # always called, so it sees every frame
             if shot_index < 0 or cut:
-                self._flush(staged, store, summary, progress)
+                for waiting in gap:  # no closing keyframe in this shot: nothing to hold
+                    self._stage(waiting, summary, [], [], [], interpolated=True)
+                gap.clear()
+                last_tracked = []
+                self._flush(self._staged, store, summary, progress)
                 shot_index += 1
                 summary.shots.append(f"s{shot_index}")
                 self.tracker.reset()
                 self.ppe_filter.reset()
-                previous_grey = None
-                matcher = (
+                self._previous_grey = None
+                self._matcher = (
                     ReferenceMatcher(frame.image)
                     if self.camera_mode is CameraMode.STABILIZE
                     else None
                 )
+            if detections is None:
+                gap.append(frame)
+                continue
             tick = time.perf_counter()
-            fit = matcher.fit(frame.image) if matcher is not None else None
-            transform_valid = self._transform_valid(fit)
-            if fit is not None and fit.residual_rms_px is not None:
-                summary.stabilization_residuals_px.append(fit.residual_rms_px)
-            evidence_classes = set(self.config.stage1.evidence_classes)
             evidence = [d for d in detections if d.class_name in evidence_classes]
             trackable = [d for d in detections if d.class_name not in evidence_classes]
             tracked = self.tracker.update(trackable)
-            grey = cv2.resize(
-                cv2.cvtColor(frame.image, cv2.COLOR_BGR2GRAY),
-                None,
-                fx=MOTION_SCALE,
-                fy=MOTION_SCALE,
-                interpolation=cv2.INTER_AREA,
-            )
-            energy = self._motion_energy(tracked, grey, previous_grey)
-            previous_grey = grey
             summary.track_s += time.perf_counter() - tick
-            staged.append(
-                _Staged(
-                    frame,
-                    summary.shots[-1],
-                    trackable,
-                    tracked,
-                    fit,
-                    transform_valid,
-                    energy,
-                    evidence,
-                )
-            )
-            if len(staged) >= max(1, self.config.stage1.batch_size):
-                self._flush(staged, store, summary, progress)
-        self._flush(staged, store, summary, progress)
+            for position, waiting in enumerate(gap, start=1):
+                weight = position / (len(gap) + 1)
+                between = interpolate_tracks(last_tracked, tracked, weight)
+                self._stage(waiting, summary, [], between, [], interpolated=True)
+            gap.clear()
+            self._stage(frame, summary, trackable, tracked, evidence, interpolated=False)
+            last_tracked = tracked
+            if len(self._staged) >= PPE_FLUSH_FRAMES:
+                self._flush(self._staged, store, summary, progress)
+        for waiting in gap:  # clip ended between keyframes
+            self._stage(waiting, summary, [], [], [], interpolated=True)
+        self._flush(self._staged, store, summary, progress)
 
         store.commit()
         summary.elapsed_s = time.perf_counter() - started
         return summary
 
+    def _stage(
+        self,
+        frame: DecodedFrame,
+        summary: Pass1Summary,
+        trackable: list[Detection],
+        tracked: list[TrackedObject],
+        evidence: list[Detection],
+        *,
+        interpolated: bool,
+    ) -> None:
+        """Stabilisation, motion energy and staging for one frame, in time order."""
+        tick = time.perf_counter()
+        fit = self._matcher.fit(frame.image) if self._matcher is not None else None
+        transform_valid = self._transform_valid(fit)
+        if fit is not None and fit.residual_rms_px is not None:
+            summary.stabilization_residuals_px.append(fit.residual_rms_px)
+        grey = cv2.resize(
+            cv2.cvtColor(frame.image, cv2.COLOR_BGR2GRAY),
+            None,
+            fx=MOTION_SCALE,
+            fy=MOTION_SCALE,
+            interpolation=cv2.INTER_AREA,
+        )
+        energy = self._motion_energy(tracked, grey, self._previous_grey)
+        self._previous_grey = grey
+        summary.track_s += time.perf_counter() - tick
+        self._staged.append(
+            _Staged(
+                frame,
+                summary.shots[-1],
+                trackable,
+                tracked,
+                fit,
+                transform_valid,
+                energy,
+                evidence,
+                interpolated,
+            )
+        )
+
     def _detected(
         self, source: FrameSource, summary: Pass1Summary
-    ) -> Iterator[tuple[DecodedFrame, list[Detection]]]:
-        batch: list[DecodedFrame] = []
+    ) -> Iterator[tuple[DecodedFrame, list[Detection] | None]]:
+        """Frames in order, with detections on every `detect_every_frames`-th (else None)."""
+        pending: list[DecodedFrame] = []
+        keys: list[DecodedFrame] = []
         batch_size = max(1, self.config.stage1.batch_size)
+        every = max(1, self.config.stage1.detect_every_frames)
 
-        def flush() -> Iterator[tuple[DecodedFrame, list[Detection]]]:
+        def flush() -> Iterator[tuple[DecodedFrame, list[Detection] | None]]:
             tick = time.perf_counter()
-            results = self.detector.predict([frame.image for frame in batch])
+            results = self.detector.predict([frame.image for frame in keys]) if keys else []
             summary.detect_s += time.perf_counter() - tick
-            yield from zip(batch, results, strict=True)
-            batch.clear()
+            found = {f.frame_index: r for f, r in zip(keys, results, strict=True)}
+            for frame in pending:
+                yield frame, found.get(frame.frame_index)
+            pending.clear()
+            keys.clear()
 
         frames = Prefetch(source)
         for frame in frames:
-            batch.append(frame)
-            if len(batch) == batch_size:
-                yield from flush()
-        if batch:
+            pending.append(frame)
+            if frame.frame_index % every == 0:
+                keys.append(frame)
+                if len(keys) == batch_size:
+                    yield from flush()
+        if pending:
             yield from flush()
         summary.decode_wait_s = frames.wait_s
 
@@ -243,8 +336,8 @@ class VisionPass:
         tick = time.perf_counter()
         crops, owners = [], []
         for position, item in enumerate(staged):
-            if item.frame.frame_index % self.config.ppe.classify_every_frames:
-                continue  # the temporal filter bridges skipped frames
+            if item.interpolated or item.frame.frame_index % self.config.ppe.classify_every_frames:
+                continue  # the temporal filter bridges skipped and interpolated frames
             height, width = item.frame.image.shape[:2]
             for tracked in item.tracked:
                 d = tracked.detection
@@ -266,7 +359,10 @@ class VisionPass:
             observations = []
             for tracked in item.tracked:
                 ppe: tuple[HelmetRecord, VestRecord] | None = None
-                classified = item.frame.frame_index % self.config.ppe.classify_every_frames == 0
+                classified = (
+                    not item.interpolated
+                    and item.frame.frame_index % self.config.ppe.classify_every_frames == 0
+                )
                 if self.ppe is not None and tracked.detection.class_name == PERSON_CLASS:
                     prediction = predictions.get((position, tracked.track_id))
                     if prediction is not None and _has_hard_hat(
@@ -291,6 +387,7 @@ class VisionPass:
                         item.fit if item.transform_valid else None,
                         ppe,
                         item.energy.get(tracked.track_id),
+                        interpolated=item.interpolated,
                     )
                 )
             stored = time.perf_counter()
@@ -364,6 +461,8 @@ class VisionPass:
         fit: AffineFit | None,
         ppe: tuple[HelmetRecord, VestRecord] | None = None,
         motion_energy: float | None = None,
+        *,
+        interpolated: bool = False,
     ) -> Pass1TrackObservation:
         d = item.detection
         oriented = Box2(x1=d.x1, y1=d.y1, x2=d.x2, y2=d.y2, space=CoordinateSpace.ORIENTED)
@@ -396,4 +495,5 @@ class VisionPass:
             confidence=d.confidence,
             box_oriented=oriented,
             motion_energy=motion_energy,
+            interpolated=interpolated,
         )

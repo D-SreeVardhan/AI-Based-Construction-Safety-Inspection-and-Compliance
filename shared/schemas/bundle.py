@@ -13,6 +13,10 @@ renders it, L1 adjudicates its evidence crops and the L3 agent's tools query it.
       safety_twin.mp4        1920x1080 H.264 side-by-side
       safety_twin_720p.mp4   web proxy for the 720p player
       report.html            offline human-readable report
+      insights.json          InsightsFile — leading indicators: exposure, brief exposures,
+                             closest approaches, exposure by zone (v3, optional)
+      exposure_heatmap.jpg   where exposure happened, over the reference frame (v3, optional)
+      evidence/<id>.mp4      a few seconds of annotated video around the incident (v3)
 
 Every time is video seconds from the start of the clip. No field carries metres.
 """
@@ -34,6 +38,9 @@ SCENE_FILE = "scene.json"
 VIDEO_FILE = "safety_twin.mp4"
 VIDEO_PROXY_FILE = "safety_twin_720p.mp4"
 REPORT_FILE = "report.html"
+INSIGHTS_FILE = "insights.json"  # v3, optional: leading indicators (shared/schemas/insights.py)
+HEATMAP_FILE = "exposure_heatmap.jpg"  # v3, optional
+SITE_VIEW_FILE = "site_view.jpg"  # v3, optional: the camera view with the configured zones
 EVIDENCE_DIR = "evidence"
 
 REQUIRED_FILES = (RUN_MANIFEST_FILE, INCIDENTS_FILE, TRACKS_SUMMARY_FILE, SCENE_FILE)

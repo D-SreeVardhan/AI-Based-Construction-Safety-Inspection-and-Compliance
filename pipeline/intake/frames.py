@@ -13,6 +13,7 @@ adaptively.
 from __future__ import annotations
 
 import math
+import subprocess
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -245,3 +246,52 @@ def sample_raw_frames(path: Path, count: int) -> list[np.ndarray]:
     finally:
         capture.release()
     return frames
+
+
+KEYFRAME_TIMEOUT_S = 120
+
+
+def sample_keyframes(
+    path: Path, count: int, size: tuple[int, int], *, max_width: int = 1280
+) -> list[np.ndarray]:
+    """Evenly spaced *keyframes*, decoded at up to `max_width`, for the drift probe.
+
+    Keyframes decode without their GOP, so this costs a fraction of seeking to arbitrary
+    frames, and drift is measured relative to the frame size (scale-invariant). Falls back
+    to `sample_raw_frames` when ffmpeg is unavailable or the clip has too few keyframes.
+    """
+    width, height = size
+    scale = min(1.0, max_width / width)
+    out_w, out_h = int(round(width * scale / 2) * 2), int(round(height * scale / 2) * 2)
+    command = [
+        "ffmpeg",
+        "-v",
+        "error",
+        "-skip_frame",
+        "nokey",
+        "-i",
+        str(path),
+        "-fps_mode",
+        "passthrough",
+        "-vf",
+        f"scale={out_w}:{out_h}",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "bgr24",
+        "-",
+    ]
+    try:
+        completed = subprocess.run(command, capture_output=True, timeout=KEYFRAME_TIMEOUT_S)
+    except (OSError, subprocess.TimeoutExpired):
+        completed = None
+    frame_bytes = out_w * out_h * 3
+    if completed is None or completed.returncode != 0 or len(completed.stdout) < frame_bytes:
+        return sample_raw_frames(path, count)
+    total = len(completed.stdout) // frame_bytes
+    if total < min(count, 6):
+        return sample_raw_frames(path, count)
+    frames = np.frombuffer(completed.stdout[: total * frame_bytes], np.uint8)
+    frames = frames.reshape(total, out_h, out_w, 3)
+    picks = np.linspace(0, total - 1, min(count, total)).astype(int)
+    return [frames[index].copy() for index in picks]

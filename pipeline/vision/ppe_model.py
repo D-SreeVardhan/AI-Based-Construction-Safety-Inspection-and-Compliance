@@ -107,7 +107,14 @@ class PPEClassifier:
         predictions: list[PPEPrediction] = []
         for start in range(0, len(crops), self.batch_size):
             chunk = crops[start : start + self.batch_size]
-            head, torso = self.model(to_tensor(chunk, self.device))
+            batch = to_tensor(chunk, self.device)
+            if len(chunk) < self.batch_size:
+                # One input shape for every call: each new batch size costs the GPU a slow
+                # cold start (measured ~18x slower per crop inside pass one).
+                padding = batch.new_zeros((self.batch_size - len(chunk), *batch.shape[1:]))
+                batch = torch.cat([batch, padding])
+            head, torso = self.model(batch)
+            head, torso = head[: len(chunk)], torso[: len(chunk)]
             head_p = torch.softmax(head / self.head_temperature, dim=1).cpu().numpy()
             torso_p = torch.softmax(torso / self.torso_temperature, dim=1).cpu().numpy()
             predictions += [PPEPrediction(h, t) for h, t in zip(head_p, torso_p, strict=True)]

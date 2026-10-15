@@ -439,6 +439,18 @@ class GroundMapper:
     def supported(self, point_xy: tuple[float, float]) -> bool:
         return self._support is not None and self._support.contains(Point(point_xy))
 
+    # Prepared shapely geometries cannot be pickled; rebuild ours on the other side
+    # (the twin renders in a worker process).
+    def __getstate__(self) -> dict:
+        state = self.__dict__.copy()
+        state["_support"] = None
+        return state
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
+        polygon = self.fit.support_polygon
+        self._support = prep(Polygon(polygon)) if polygon else None
+
 
 class BatchCamera:
     """Ground back-projection for many parameter sets at once (bootstrap replicates)."""
@@ -516,7 +528,11 @@ def sample_vertical_pairs(
     pairs: list[VerticalPair] = []
     for _, observations in observations_by_frame:
         for o in observations:
-            if o.object_class != "person" or (o.confidence or 0.0) < minimum_confidence:
+            if (
+                o.object_class != "person"
+                or o.interpolated  # calibrate on what the detector saw, not interpolations
+                or (o.confidence or 0.0) < minimum_confidence
+            ):
                 continue
             box = o.box_reference
             if (

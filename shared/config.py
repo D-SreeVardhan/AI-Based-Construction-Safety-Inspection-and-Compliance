@@ -32,9 +32,14 @@ class Stage1Config(StrictModel):
     maximum_detections: int
     batch_size: int
     device: str
+    # Run the detector on every n-th processed frame; the tracker's boxes are interpolated
+    # in between (pass one is offline, so both neighbours are known).
+    detect_every_frames: int = Field(default=1, ge=1, le=4)
 
 
 class TrackerConfig(StrictModel):
+    # v3: link fragmented person tracks across occlusions (pipeline/mapping/stitching.py).
+    stitch: bool = True
     type: str
     track_high_threshold: float
     track_low_threshold: float
@@ -124,6 +129,12 @@ class RenderConfig(StrictModel):
     preset: str
     video_codec: str
     proxy_height: int
+    # v3. "faces": pixelate workers' faces in every exported image and video; "off".
+    privacy: str = Field(default="faces", pattern="^(faces|off)$")
+    # Render the twin pane in a worker process, in parallel with the source pane.
+    parallel_twin: bool = True
+    # Cut a short annotated clip around every incident (evidence/<id>.mp4).
+    evidence_clips: bool = True
 
 
 class RuntimeConfig(StrictModel):

@@ -2,6 +2,10 @@
 
     uv run python tools/review_incidents.py output/<run_id> --out evaluation/labels/sard-9
     uv run python tools/review_incidents.py output/<run_id> --summary     # precision per rule
+    uv run python tools/review_incidents.py output/<run_id> --import incident_verdicts_<run>.jsonl
+
+The report's Incidents page has the same buttons (Real / false alarm / Unsure); its
+"Export review" file is merged with `--import`, then `--summary` gives precision.
 
 Each incident is shown at its evidence moment. The worker is in red, and the zone, edge or
 machine the rule used is drawn too. Next to it are the original-resolution crop and the
@@ -124,6 +128,13 @@ def main() -> None:
     parser.add_argument("run_dir", type=Path)
     parser.add_argument("--out", type=Path, default=Path("evaluation/labels/sard-9"))
     parser.add_argument("--summary", action="store_true", help="print precision per rule and exit")
+    parser.add_argument(
+        "--import",
+        dest="import_path",
+        type=Path,
+        default=None,
+        help="merge verdicts exported from report.html (Export review)",
+    )
     args = parser.parse_args()
 
     manifest = read_model(args.run_dir / RUN_MANIFEST_FILE, RunManifest)
@@ -141,6 +152,35 @@ def main() -> None:
     args.out.mkdir(parents=True, exist_ok=True)
     path = args.out / "incident_verdicts.jsonl"
     verdicts = load_verdicts(path)
+    if args.import_path is not None:
+        by_id = {i.incident_id: fp for i, fp in zip(incidents, fps, strict=True)}
+        imported = 0
+        with path.open("a", encoding="utf-8") as sink:
+            for line in args.import_path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                fp = by_id.get(row.get("incident_id"))
+                if fp is None or row.get("verdict") not in ("real", "false_alarm", "unsure"):
+                    continue
+                entry = {"verdict": row["verdict"]}
+                if row.get("reason"):
+                    entry["reason"] = row["reason"]
+                sink.write(
+                    json.dumps(
+                        {
+                            "run_id": manifest.run_id,
+                            "incident_id": row["incident_id"],
+                            "fingerprint": fp,
+                            **entry,
+                        }
+                    )
+                    + "\n"
+                )
+                imported += 1
+        print(f"imported {imported} verdicts into {path}")
+        verdicts = load_verdicts(path)
+        args.summary = True
     if args.summary:
         summary = precision(fps, verdicts)
         result = Path(f"evaluation/results/incident_precision_{manifest.run_id}.json")

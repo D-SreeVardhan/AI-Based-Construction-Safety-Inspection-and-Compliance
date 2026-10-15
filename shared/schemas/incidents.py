@@ -23,6 +23,26 @@ class RuleResult(StrictModel):
     references: tuple[str, ...] = ()
 
 
+class TracePoint(StrictModel):
+    """The rule's view of one subject at one moment: the condition and its key signal."""
+
+    t: float = Field(ge=0.0)
+    state: str  # holds | clear | unknown
+    value: float | None = None  # PPE confidence (R1/R2) or median distance in WH (R4/R5)
+    lower: float | None = None
+    upper: float | None = None
+
+
+class IncidentTrace(StrictModel):
+    """Why an incident fired: the condition over time, from 2 s before it began to 2 s
+    after it ended, thinned to at most a few points per second (state changes always kept)."""
+
+    metric: str  # confidence | distance_wh | state
+    debounce_s: float = Field(ge=0.0)
+    observed_fraction: float = Field(ge=0.0, le=1.0)
+    points: tuple[TracePoint, ...]
+
+
 class IncidentNarration(StrictModel):
     """Readable briefing for an incident (L4), shown only after the L5 guardrail passed.
 
@@ -76,3 +96,8 @@ class IncidentRecord(StrictModel):
     # Why the episode ended: condition_cleared | evidence_lost | shot_boundary | end_of_clip.
     resolution_reason: str | None = None
     narration: IncidentNarration | None = None
+    # v3: explainability and triage.
+    trace: IncidentTrace | None = None
+    # strong | moderate | weak: how well the video supports the alert (see the engine).
+    evidence_quality: str | None = None
+    evidence_clip_path: str | None = None

@@ -13,20 +13,28 @@ from __future__ import annotations
 import hashlib
 import importlib.metadata
 import math
+import shutil
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+import cv2
 import numpy as np
 
 from jobs.pass2 import Pass2Result, run_pass2
 from jobs.render_stage import RenderResult, render_run
 from pipeline.cache.pass1_store import Pass1Store
-from pipeline.intake.frames import FrameSource, sample_raw_frames
-from pipeline.intake.geometry_gate import CameraMode, GeometryGate, classify_drift, gate_geometry
+from pipeline.intake.frames import FrameSource, Letterbox, sample_keyframes
+from pipeline.intake.geometry_gate import (
+    CameraMode,
+    DriftDecision,
+    GeometryGate,
+    classify_drift,
+    gate_geometry,
+)
 from pipeline.intake.probe import VideoMetadata, probe_video
 from pipeline.intake.stabilization import DriftProbe, probe_drift
 from pipeline.mapping.camera_model import (
@@ -36,7 +44,8 @@ from pipeline.mapping.camera_model import (
     sample_vertical_pairs,
 )
 from pipeline.mapping.frame_context import FrameContextBuilder
-from pipeline.output.bundle import validate_bundle, write_model
+from pipeline.mapping.stitching import StitchedStore, appearance_from_video, stitch
+from pipeline.output.bundle import read_model, validate_bundle, write_model
 from pipeline.output.summaries import TrackSummaryBuilder
 from pipeline.report.html import write_report
 from pipeline.rules.catalogue import load_catalogue
@@ -47,8 +56,9 @@ from pipeline.scene.site_config import (
     scene_from_site_config,
     view_matches,
 )
+from pipeline.scene.zone_health import REVIEW_THRESHOLD, median_background, zone_change
 from pipeline.vision.detector import Stage1Detector, file_sha256, resolve_weights
-from pipeline.vision.pass1 import Pass1Summary, VisionPass
+from pipeline.vision.pass1 import Pass1Summary, VisionPass, summary_from_store
 from pipeline.vision.ppe_model import PPEClassifier
 from pipeline.vision.tracker import ByteTrackAdapter
 from shared.config import AppConfig, load_config
@@ -57,6 +67,7 @@ from shared.errors import PipelineError
 from shared.paths import run_work_dir
 from shared.schemas.bundle import (
     INCIDENTS_FILE,
+    INSIGHTS_FILE,
     REPORT_FILE,
     RUN_MANIFEST_FILE,
     SCENE_FILE,
@@ -144,8 +155,12 @@ class ProcessJob:
         config: AppConfig | None = None,
         project_root: Path | None = None,
         report: Reporter | None = None,
+        reuse_pass1: Path | None = None,
     ) -> None:
         self.video = video.resolve()
+        # A finished run whose detections, tracks and PPE are reused: only geometry, rules
+        # and rendering run again (new zones or rule settings in minutes, no GPU needed).
+        self.reuse_run = reuse_pass1.resolve() if reuse_pass1 is not None else None
         self.config = config or load_config()
         self.root = project_root or Path(__file__).resolve().parents[1]
         self.run_id = run_id or f"run-{uuid.uuid4().hex[:12]}"
@@ -157,6 +172,9 @@ class ProcessJob:
         self.model_ids: dict[str, str] = {}
         self.plane_fits: dict[str, PlaneFit] = {}
         self.on_battery = False
+        self.keyframes: list[np.ndarray] = []
+        self.zone_health: dict[str, float] = {}
+        self.stitching: dict[str, int] = {}
 
     def run(self) -> RunManifest:
         if self.run_dir.exists():
@@ -175,7 +193,10 @@ class ProcessJob:
         with timer.stage(JobStage.INTAKE):
             metadata = probe_video(self.video)
             video_sha = _sha256(self.video)
-            drift = probe_drift(sample_raw_frames(self.video, DRIFT_SAMPLES))
+            self.keyframes = sample_keyframes(
+                self.video, DRIFT_SAMPLES, (metadata.width, metadata.height)
+            )
+            drift = probe_drift(self.keyframes)
             decision = classify_drift(drift, self.config.intake)
             self.report(
                 f"intake: {metadata.width}x{metadata.height} {metadata.fps:.2f} fps "
@@ -192,38 +213,17 @@ class ProcessJob:
         )
 
         with timer.stage(JobStage.DETECTION):
-            weights, fine_tuned = resolve_weights(self.config.stage1, self.root)
-            if not fine_tuned:
-                self.warnings.append(
-                    f"stage-1 detector is the pretrained fallback ({weights.name}), "
-                    "not a construction fine-tune"
-                )
-            detector = Stage1Detector(self.config.stage1, weights)
-            tracker = ByteTrackAdapter(
-                self.config.tracker,
-                self.config.intake.target_fps,
-                sorted(set(detector.classes.values()) - set(self.config.stage1.evidence_classes)),
-            )
-            ppe = self._ppe_classifier(detector.device)
-            store = Pass1Store(self.work_dir / "pass1.sqlite")
-            expected = max(1, round(metadata.duration_s * self.config.intake.target_fps))
-            pass1 = VisionPass(
-                detector, tracker, self.config, camera_mode=decision.mode, ppe=ppe
-            ).run(source, store, progress=self._progress("detect", expected))
-            store.set_meta("detector_sha256", detector.model_sha256())
-            store.mark_complete()
-            self.warnings += source.warnings
-            self.report(
-                f"pass 1: {pass1.frames} frames, {pass1.detections} detections, "
-                f"{len(pass1.shots)} shot(s) in {pass1.elapsed_s:.1f} s "
-                f"(detector {pass1.detect_s:.1f} s)"
-            )
+            if self.reuse_run is not None:
+                store, pass1, stage1_id, ppe_available = self._reuse_pass1()
+            else:
+                store, pass1, stage1_id, ppe_available = self._run_pass1(source, metadata, decision)
 
         with timer.stage(JobStage.MAPPING_RULES):
             gate = self._geometry_gate(decision.mode, drift, pass1)
             self.plane_fits = self._fit_planes(store, pass1, gate)
             scene = self._scene(source, store, pass1, video_sha)
-            pass2 = self._pass2(store, scene, gate, ppe_available=ppe is not None)
+            tracks = self._stitch(store)
+            pass2 = self._pass2(tracks, scene, gate, ppe_available=ppe_available)
             self.report(
                 f"pass 2: {len(pass2.rules.incidents)} incident(s); geometry "
                 f"{'supported' if gate.supported else 'unsupported'} ({gate.reason_code})"
@@ -232,7 +232,7 @@ class ProcessJob:
         with timer.stage(JobStage.RENDER):
             rendered = render_run(
                 source=source,
-                store=store,
+                store=tracks,
                 pass2=pass2,
                 scene=scene,
                 config=self.config,
@@ -250,8 +250,7 @@ class ProcessJob:
                 created_at,
                 metadata,
                 video_sha,
-                detector,
-                weights,
+                stage1_id,
                 decision.mode,
                 drift,
                 gate,
@@ -264,6 +263,97 @@ class ProcessJob:
         return manifest
 
     # ------------------------------------------------------------------ stages
+
+    def _run_pass1(
+        self, source: FrameSource, metadata: VideoMetadata, decision: DriftDecision
+    ) -> tuple[Pass1Store, Pass1Summary, str, bool]:
+        weights, fine_tuned = resolve_weights(self.config.stage1, self.root)
+        if not fine_tuned:
+            self.warnings.append(
+                f"stage-1 detector is the pretrained fallback ({weights.name}), "
+                "not a construction fine-tune"
+            )
+        detector = Stage1Detector(self.config.stage1, weights)
+        tracker = ByteTrackAdapter(
+            self.config.tracker,
+            # The tracker only sees detection frames: its memory is counted in those.
+            self.config.intake.target_fps / self.config.stage1.detect_every_frames,
+            sorted(set(detector.classes.values()) - set(self.config.stage1.evidence_classes)),
+        )
+        ppe = self._ppe_classifier(detector.device)
+        store = Pass1Store(self.work_dir / "pass1.sqlite")
+        expected = max(1, round(metadata.duration_s * self.config.intake.target_fps))
+        pass1 = VisionPass(detector, tracker, self.config, camera_mode=decision.mode, ppe=ppe).run(
+            source, store, progress=self._progress("detect", expected)
+        )
+        stage1_id = f"{weights.name}:{detector.model_sha256()[:16]}"
+        store.set_meta("detector_sha256", detector.model_sha256())
+        store.set_meta("stage1_id", stage1_id)
+        store.set_meta("ppe_id", self.model_ids.get("ppe"))
+        store.set_meta("pass1_summary", asdict(pass1))
+        store.set_meta("source_warnings", list(source.warnings))
+        store.mark_complete()
+        self.warnings += source.warnings
+        self.report(
+            f"pass 1: {pass1.frames} frames, {pass1.detections} detections, "
+            f"{len(pass1.shots)} shot(s) in {pass1.elapsed_s:.1f} s "
+            f"(detector {pass1.detect_s:.1f} s)"
+        )
+        return store, pass1, stage1_id, ppe is not None
+
+    def _reuse_pass1(self) -> tuple[Pass1Store, Pass1Summary, str, bool]:
+        """Copy a finished run's pass-1 store and carry over what it recorded."""
+        assert self.reuse_run is not None
+        previous = read_model(self.reuse_run / RUN_MANIFEST_FILE, RunManifest)
+        if Path(previous.input_video.path).resolve() != self.video:
+            raise PipelineError(
+                "REUSE_MISMATCH", f"{self.reuse_run} processed {previous.input_video.path}"
+            )
+        source_store = Path(previous.diagnostics["work_dir"]) / "pass1.sqlite"
+        if not source_store.is_file():
+            raise PipelineError("REUSE_MISSING", f"pass-1 store not found: {source_store}")
+        shutil.copyfile(source_store, self.work_dir / "pass1.sqlite")
+        store = Pass1Store(self.work_dir / "pass1.sqlite")
+        if not store.complete:
+            raise PipelineError("REUSE_INCOMPLETE", f"{source_store} is not a finished pass 1")
+        recorded = store.meta("pass1_summary")
+        pass1 = Pass1Summary(**recorded) if recorded else summary_from_store(store)
+        stage1_id = store.meta("stage1_id") or previous.model_ids.get("stage1", "unknown")
+        ppe_id = store.meta("ppe_id") or previous.model_ids.get("ppe")
+        if ppe_id:
+            self.model_ids["ppe"] = ppe_id
+        else:
+            self.warnings.append("PPE classifier not trained yet: R1/R2 unsupported")
+        if not stage1_id.startswith(Path(self.config.stage1.model_path).name):
+            self.warnings.append(
+                f"stage-1 detector is the pretrained fallback ({stage1_id.split(':')[0]}), "
+                "not a construction fine-tune"
+            )
+        self.warnings += store.meta("source_warnings", [])
+        self.warnings.append(f"detections reused from run {previous.run_id} (reprocess)")
+        self.report(f"pass 1 reused from {previous.run_id}: {pass1.frames} frames")
+        return store, pass1, stage1_id, bool(ppe_id)
+
+    def _stitch(self, store: Pass1Store) -> Pass1Store | StitchedStore:
+        """One identity per worker across occlusions; the store itself stays as recorded."""
+        if not self.config.tracker.stitch:
+            return store
+        appearance = appearance_from_video(
+            self.video,
+            store.frames_with_observations(),
+            (self.config.intake.target_width, self.config.intake.target_height),
+        )
+        result = stitch(store.frames_with_observations(), appearance=appearance)
+        self.stitching = {
+            "tracks_before": result.tracks_before,
+            "identities_after": result.tracks_after,
+            "links": len(result.links),
+        }
+        self.report(
+            f"stitching: {result.tracks_before} person tracks -> {result.tracks_after} "
+            f"identities ({len(result.links)} links)"
+        )
+        return StitchedStore(store, result.mapping)
 
     def _progress(self, label: str, expected: int) -> Callable[..., None]:
         last = [0.0]
@@ -327,9 +417,29 @@ class ProcessJob:
                     )
             if not wanted:
                 break
-        return scene_from_site_config(
+        scene = scene_from_site_config(
             config, shot_ids=matched, video_sha256=video_sha, warnings=tuple(self.warnings[-1:])
         )
+        if len(first_frames) == 1 and matched and self.keyframes:
+            # One fixed view: the clip's median background against the drawing reference.
+            canvas = (self.config.intake.target_width, self.config.intake.target_height)
+            height, width = self.keyframes[0].shape[:2]
+            letterbox = Letterbox.fit((width, height), canvas)
+            background = median_background([letterbox.apply(f) for f in self.keyframes])
+            reference_canvas = cv2.resize(reference, canvas, interpolation=cv2.INTER_AREA)
+            self.zone_health = zone_change(
+                reference_canvas, background, scene.proposals_for(matched[0])
+            )
+            labels = {
+                p.proposal_id: p.label or p.proposal_id for p in scene.proposals_for(matched[0])
+            }
+            for proposal_id, change in self.zone_health.items():
+                if change >= REVIEW_THRESHOLD:
+                    self.warnings.append(
+                        f"zone health: '{labels[proposal_id]}' looks different from when it was "
+                        f"drawn (change {change:.2f}); review the site config"
+                    )
+        return scene
 
     def _fit_planes(
         self, store: Pass1Store, pass1: Pass1Summary, gate: GeometryGate
@@ -391,7 +501,12 @@ class ProcessJob:
         return PPEClassifier(path, device, batch_size=self.config.ppe.batch_size)
 
     def _pass2(
-        self, store: Pass1Store, scene: SceneCache, gate: GeometryGate, *, ppe_available: bool
+        self,
+        store: Pass1Store | StitchedStore,
+        scene: SceneCache,
+        gate: GeometryGate,
+        *,
+        ppe_available: bool,
     ) -> Pass2Result:
         builder = FrameContextBuilder(
             run_id=self.run_id,
@@ -415,8 +530,7 @@ class ProcessJob:
         created_at: str,
         metadata: VideoMetadata,
         video_sha: str,
-        detector: Stage1Detector,
-        weights: Path,
+        stage1_id: str,
         mode: CameraMode,
         drift: DriftProbe,
         gate: GeometryGate,
@@ -427,16 +541,34 @@ class ProcessJob:
         timer: _Timer,
     ) -> RunManifest:
         catalogue = load_catalogue()
+        incidents = tuple(
+            incident.model_copy(
+                update={"evidence_clip_path": rendered.clips.get(incident.incident_id)}
+            )
+            for incident in pass2.rules.incidents
+        )
         write_model(
             self.run_dir / INCIDENTS_FILE,
             IncidentsFile(
                 run_id=self.run_id,
                 catalogue_sha256=catalogue.sha256,
-                incidents=pass2.rules.incidents,
+                incidents=incidents,
             ),
         )
         write_model(self.run_dir / TRACKS_SUMMARY_FILE, pass2.tracks_summary)
         write_model(self.run_dir / SCENE_FILE, scene)
+        artifacts = {}
+        insights = None
+        if pass2.insights is not None:
+            insights = pass2.insights.model_copy(
+                update={"heatmap_path": rendered.heatmap, "zone_health": self.zone_health}
+            )
+            write_model(self.run_dir / INSIGHTS_FILE, insights)
+            artifacts["insights"] = INSIGHTS_FILE
+        if rendered.heatmap:
+            artifacts["heatmap"] = rendered.heatmap
+        if rendered.site_view:
+            artifacts["site_view"] = rendered.site_view
         manifest = RunManifest(
             run_id=self.run_id,
             status=ProcessingStatus.COMPLETED,
@@ -452,7 +584,7 @@ class ProcessJob:
                 fps=metadata.fps,
             ),
             model_ids={
-                "stage1": f"{weights.name}:{detector.model_sha256()[:16]}",
+                "stage1": stage1_id,
                 **self.model_ids,
             },
             dependency_versions=_versions(),
@@ -468,10 +600,12 @@ class ProcessJob:
                 "video": VIDEO_FILE,
                 "video_proxy": VIDEO_PROXY_FILE,
                 "report": REPORT_FILE,
+                **artifacts,
             },
             diagnostics={
                 "camera_mode": mode.value,
                 "on_battery": self.on_battery,
+                "privacy": self.config.render.privacy,
                 "drift_peak_px": drift.peak_displacement_px,
                 "drift_peak_fraction": drift.peak_fraction,
                 "geometry_gate": gate.model_dump(mode="json"),
@@ -490,6 +624,7 @@ class ProcessJob:
                     "store": round(pass1.store_s, 1),
                 },
                 "rendered_frames": rendered.frames,
+                "stitching": self.stitching,
                 "camera_fits": {
                     shot: fit.model_dump(mode="json", exclude={"bootstrap", "support_polygon"})
                     | {"bootstrap_replicates": len(fit.bootstrap)}
@@ -499,7 +634,19 @@ class ProcessJob:
         )
         write_model(self.run_dir / RUN_MANIFEST_FILE, manifest)
         write_report(
-            self.run_dir / REPORT_FILE, manifest, pass2.rules.incidents, tracks=pass2.tracks_summary
+            self.run_dir / REPORT_FILE,
+            manifest,
+            incidents,
+            tracks=pass2.tracks_summary,
+            insights=insights,
+            zone_labels={
+                p.proposal_id: p.label or p.proposal_id
+                for proposals in scene.shot_proposals.values()
+                for p in proposals
+            },
+            near_wh=self.config.rules.r4_near_max_wh,
+            caution_wh=self.config.rules.r4_caution_max_wh,
+            private=self.config.render.privacy == "faces",
         )
         check = validate_bundle(self.run_dir, require_media=True)
         if not check.ok:

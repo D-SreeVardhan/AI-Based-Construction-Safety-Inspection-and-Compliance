@@ -37,6 +37,9 @@ class Pass1TrackObservation(StrictModel):
     # Machinery only: mean frame-to-frame intensity change inside the box (0-1), the
     # articulation cue for operating state (v7 §38).
     motion_energy: float | None = Field(default=None, ge=0.0, le=1.0)
+    # Between two detection frames (`stage1.detect_every_frames` > 1): a box interpolated
+    # from the detections either side, not one the detector saw.
+    interpolated: bool = False
 
 
 class MappedTrackRecord(StrictModel):

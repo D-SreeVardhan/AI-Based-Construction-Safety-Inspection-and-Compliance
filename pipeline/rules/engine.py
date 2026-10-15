@@ -17,6 +17,13 @@ from dataclasses import dataclass
 
 from pipeline.rules.base import RuleEvaluator
 from pipeline.rules.catalogue import CompiledCatalogue, load_catalogue
+from pipeline.rules.insights import (
+    MAX_FRAME_GAP_S,
+    ExposureRecorder,
+    TraceRecorder,
+    evidence_quality,
+    trace_point,
+)
 from pipeline.rules.r1 import R1MissingHelmet
 from pipeline.rules.r2 import R2MissingHiVis
 from pipeline.rules.r3 import R3RestrictedZone
@@ -37,6 +44,7 @@ from shared.enums import HelmetState, RuleId, RuleStatus, VestState
 from shared.identity import display_track_label, incident_id
 from shared.schemas.frame import ActiveAlert, FrameContext, FrameRuleOutput
 from shared.schemas.incidents import IncidentRecord, RuleResult
+from shared.schemas.insights import InsightsFile
 from shared.schemas.run import RuleCoverageEntry
 from shared.schemas.tracks import HelmetRecord, VestRecord
 
@@ -103,6 +111,7 @@ class _IncidentEntry:
 class EngineResult:
     incidents: tuple[IncidentRecord, ...]
     coverage: tuple[RuleCoverageEntry, ...]
+    insights: InsightsFile | None = None
 
 
 class RuleEngine:
@@ -134,6 +143,8 @@ class RuleEngine:
         self._shot_id: str | None = None
         self._last_time_s = 0.0
         self._finalized = False
+        self.exposure = ExposureRecorder()
+        self.traces = TraceRecorder()
 
     # ------------------------------------------------------------------ per frame
 
@@ -144,6 +155,13 @@ class RuleEngine:
             raise ValueError(f"frame belongs to run {context.run_id}, engine is {self.run_id}")
         opened: list[str] = []
         resolved: list[str] = []
+        continuing = self._shot_id is not None and context.shot_id == self._shot_id
+        dt = (
+            min(max(context.video_time_s - self._last_time_s, 0.0), MAX_FRAME_GAP_S)
+            if continuing
+            else 0.0
+        )
+        self.exposure.frame(dt)
         if self._shot_id is not None and context.shot_id != self._shot_id:
             self._close_subjects(self._last_time_s, "shot_boundary", opened, resolved)
         elif self._shot_id is not None and context.video_time_s < self._last_time_s:
@@ -176,12 +194,18 @@ class RuleEngine:
             predicate = predicate_for(result.status)
             sample = self._sample(context, result) if predicate is Predicate.HOLDS else None
             transition = subject.timeline.observe(time_s, predicate, sample)
+            self.exposure.observe(result, time_s, dt, predicate is Predicate.HOLDS)
+            self.exposure.settle(key, subject.timeline, transition, result, time_s)
+            self.traces.add(key, trace_point(time_s, predicate, result), transition)
             self._record(subject, transition, opened, resolved)
 
         for key, subject in list(self._subjects.items()):
             if key in observed:
                 continue
-            self._record(subject, subject.timeline.expire(time_s), opened, resolved)
+            transition = subject.timeline.expire(time_s)
+            self.exposure.settle(key, subject.timeline, transition, None, time_s)
+            self.traces.add(key, trace_point(time_s, Predicate.UNKNOWN, None), transition)
+            self._record(subject, transition, opened, resolved)
             idle = time_s - subject.last_seen_s
             if not subject.timeline.active and subject.timeline.episode is None:
                 if idle >= self._idle_prune_s:
@@ -201,13 +225,20 @@ class RuleEngine:
             raise RuntimeError("the rule engine has already been finalized")
         end = self._last_time_s if end_time_s is None else end_time_s
         self._close_subjects(end, "end_of_clip", [], [])
+        self.exposure.close_all()
+        self.traces.flush()
         self._finalized = True
         entries = sorted(
             self._incidents.values(),
             key=lambda entry: (entry.episode.confirmed_at_s, entry.rule_id, entry.track_id),
         )
         incidents = tuple(self._incident_record(entry) for entry in entries)
-        return EngineResult(incidents=incidents, coverage=self._coverage(incidents))
+        counts = Counter(incident.rule_id for incident in incidents)
+        return EngineResult(
+            incidents=incidents,
+            coverage=self._coverage(incidents),
+            insights=self.exposure.build(self.run_id, counts),
+        )
 
     # ------------------------------------------------------------------ internals
 
@@ -309,8 +340,12 @@ class RuleEngine:
     def _close_subjects(
         self, time_s: float, reason: str, opened: list[str], resolved: list[str]
     ) -> None:
-        for subject in self._subjects.values():
-            self._record(subject, subject.timeline.close(time_s, reason), opened, resolved)
+        for key, subject in self._subjects.items():
+            transition = subject.timeline.close(time_s, reason)
+            self.exposure.settle(key, subject.timeline, transition, None, time_s)
+            if transition is not None:
+                self.traces.add(key, trace_point(time_s, Predicate.UNKNOWN, None), transition)
+            self._record(subject, transition, opened, resolved)
         self._subjects.clear()
 
     def _active_alerts(self) -> tuple[ActiveAlert, ...]:
@@ -335,6 +370,19 @@ class RuleEngine:
         rule = self.catalogue.rule(entry.rule_id)
         episode = entry.episode
         peak = episode.peak
+        debounce = self._params[entry.rule_id].debounce_s
+        end = episode.resolved_at_s if episode.resolved_at_s is not None else episode.last_holds_s
+        trace = self.traces.trace_for(
+            id(episode), debounce_s=debounce, start_s=episode.first_seen_s, end_s=end
+        )
+        quality = evidence_quality(
+            observed_fraction=trace.observed_fraction if trace else 0.0,
+            mean_confidence=episode.mean_confidence,
+            duration_s=episode.duration_s(),
+            debounce_s=debounce,
+            confidence_floor=self.config.ppe_confidence_floor,
+            margin=self.config.adjudication_margin,
+        )
         values = {
             "track_id": display_track_label(entry.track_id),
             "duration_s": f"{episode.duration_s():.1f}",
@@ -377,6 +425,8 @@ class RuleEngine:
             vest=peak.vest,
             adjudication_candidate=self._needs_adjudication(peak.helmet, peak.vest),
             resolution_reason=episode.resolution_reason,
+            trace=trace,
+            evidence_quality=quality,
         )
 
     def _needs_adjudication(self, helmet: HelmetRecord | None, vest: VestRecord | None) -> bool:

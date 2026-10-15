@@ -98,3 +98,5 @@ select = ["E", "F", "I", "UP", "B"]
 "llm/corpus.py" = ["E501"]
 # Report page: inline CSS and HTML templates read better unwrapped.
 "pipeline/report/html.py" = ["E501"]
+"pipeline/report/insights_html.py" = ["E501"]
+"pipeline/report/assets.py" = ["E501"]

@@ -53,13 +53,22 @@ def main(argv: list[str] | None = None) -> int:
         help="With --synthetic: skip the placeholder encode (schema-only smoke tests)",
     )
 
+    reprocess = sub.add_parser(
+        "reprocess",
+        help="Re-run geometry, rules and rendering on a finished run's detections (no GPU)",
+    )
+    reprocess.add_argument("run_dir", type=Path, help="A finished run: output/<run_id>")
+    reprocess.add_argument("--site", type=Path, default=None, help="Site config (zones/edges)")
+    reprocess.add_argument("--output-root", type=Path, default=Path("output"))
+    reprocess.add_argument("--run-id", type=str, default=None)
+
     args = parser.parse_args(argv)
 
     if args.command in (None, "status"):
         root = Path(__file__).resolve().parents[1]
         print("construction-safety-twin 0.1.0")
         print(f"root={root}")
-        print("Commands: status | app | process <video>")
+        print("Commands: status | app | process <video> | reprocess <run_dir>")
         print("See docs/plan/construction-safety-2.5d-twin-plan-v7.md")
         return 0
 
@@ -68,6 +77,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "process" and not (args.synthetic or args.skip_video):
         return _process(args)
+
+    if args.command == "reprocess":
+        return _process(args, reuse=True)
 
     if args.command == "process":
         job = FakePipelineJob(
@@ -88,17 +100,24 @@ def main(argv: list[str] | None = None) -> int:
     return 1
 
 
-def _process(args: argparse.Namespace) -> int:
+def _process(args: argparse.Namespace, *, reuse: bool = False) -> int:
     # Imported here so `status`, `app` and `--synthetic` work without the vision extra.
     from jobs.process_job import ProcessJob
+    from pipeline.output.bundle import read_model
     from shared.errors import PipelineError
+    from shared.schemas.run import RunManifest
 
+    video = args.video if not reuse else None
+    if reuse:
+        previous = read_model(args.run_dir / "run_manifest.json", RunManifest)
+        video = Path(previous.input_video.path)
     job = ProcessJob(
-        args.video,
+        video,
         output_root=args.output_root,
         site_config=args.site,
         run_id=args.run_id,
         report=lambda message: print(message, flush=True),
+        reuse_pass1=args.run_dir if reuse else None,
     )
     try:
         manifest = job.run()

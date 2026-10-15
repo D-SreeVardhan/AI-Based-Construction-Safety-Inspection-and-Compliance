@@ -169,6 +169,11 @@ class SubjectTimeline:
         return transition
 
     @property
+    def pending_since_s(self) -> float:
+        """Start of the current pending (not yet debounced) condition."""
+        return self._pending_since_s
+
+    @property
     def active(self) -> bool:
         return self.state in (
             AlertState.PENDING_ALERT,

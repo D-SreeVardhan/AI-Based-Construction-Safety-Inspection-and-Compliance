@@ -20,15 +20,12 @@ from pathlib import Path
 from llm.guardrail import check
 from llm.narration import NarrationFacts, chat_messages, facts_from_incident, template_narration
 from pipeline.output.bundle import read_model, write_model
-from pipeline.report.html import write_report
+from pipeline.report.html import rebuild_report
 from shared.schemas.bundle import (
     INCIDENTS_FILE,
-    REPORT_FILE,
     RUN_MANIFEST_FILE,
     SCENE_FILE,
-    TRACKS_SUMMARY_FILE,
     IncidentsFile,
-    TracksSummaryFile,
 )
 from shared.schemas.incidents import IncidentNarration
 from shared.schemas.run import RunManifest
@@ -157,6 +154,5 @@ def narrate_run(run_dir: Path, narrator: Narrator | None = None) -> dict[str, ob
     )
     write_model(run_dir / INCIDENTS_FILE, bundle.model_copy(update={"incidents": incidents}))
     write_model(run_dir / RUN_MANIFEST_FILE, manifest)
-    tracks = read_model(run_dir / TRACKS_SUMMARY_FILE, TracksSummaryFile)
-    write_report(run_dir / REPORT_FILE, manifest, incidents, tracks=tracks)
+    rebuild_report(run_dir)
     return summary

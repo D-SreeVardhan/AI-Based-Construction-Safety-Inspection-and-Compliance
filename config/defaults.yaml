@@ -25,6 +25,9 @@ stage1:
   iou: 0.60
   maximum_detections: 200
   batch_size: 4
+  # Detector on every 2nd processed frame (7.5 Hz at 15 fps); boxes in between are
+  # interpolated from the two neighbouring detections. Halves the dominant pass-1 cost.
+  detect_every_frames: 2
   # auto → cuda, then mps, then cpu.
   device: auto
 
@@ -35,6 +38,9 @@ tracker:
   new_track_threshold: 0.55
   match_threshold: 0.80
   buffer_seconds: 3.0
+  # Re-link a worker's track after occlusions longer than the buffer: motion, size and
+  # clothing colour must all agree (pipeline/mapping/stitching.py).
+  stitch: true
 
 ppe:
   model_path: artifacts/models/ppe/best.pt
@@ -125,6 +131,11 @@ render:
   # auto → NVIDIA NVENC, then Intel Quick Sync, whichever works here; else libx264.
   video_codec: auto
   proxy_height: 720
+  # Privacy by default: workers' faces are pixelated in all exported media (helmets stay
+  # visible). "off" only for footage that is already anonymised.
+  privacy: faces
+  parallel_twin: true
+  evidence_clips: true
 
 runtime:
   processing_checkpoint_frames: 250
