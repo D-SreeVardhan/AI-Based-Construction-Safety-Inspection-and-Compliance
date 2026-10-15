@@ -78,7 +78,10 @@ safety-eval = "evaluation.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --strict-markers"
+addopts = "-q --strict-markers -m \"not gpu\""
+markers = [
+  "gpu: needs CUDA, the trained models and data/external/sard/9.mp4 (run with -m gpu)",
+]
 
 [tool.ruff]
 line-length = 100
