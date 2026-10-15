@@ -8,6 +8,7 @@ One client covers hosted APIs and local servers; which one is used is configurat
     SAFETY_LLM_BASE_URL   required for `custom`, optional override otherwise
     SAFETY_LLM_REASONING  optional `reasoning_effort` (none | low | medium | high); thinking
                           models otherwise spend the token budget before answering
+    SAFETY_LLM_FALLBACK_MODELS  optional, comma-separated: tried when the model is overloaded
 
 Standard library only, so the server image stays small.
 """
@@ -35,10 +36,15 @@ PRESETS: dict[str, tuple[str, str]] = {
 # Thinking kept short by default: local thinking models answer directly ("none"); Gemini 3
 # models cannot turn thinking off, so the least that grounded Q&A needs ("low").
 DEFAULT_REASONING = {"ollama": "none", "gemini": "low"}
+# Backup models on the same free tier, for when the main one returns "high demand".
+DEFAULT_FALLBACKS = {"gemini": ("gemini-3.6-flash", "gemini-2.5-flash")}
+TRANSIENT_HTTP = {408, 429, 500, 502, 503, 504}
 
 
 class ProviderError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, transient: bool = False) -> None:
+        super().__init__(message)
+        self.transient = transient
 
 
 @dataclass(frozen=True)
@@ -58,6 +64,9 @@ class ChatProvider:
     api_key: str | None = None
     timeout_s: float = 60.0
     reasoning: str | None = None
+    # Tried in order when the main model is overloaded or down (429, 5xx, timeout); free
+    # tiers see "high demand" 503s at peak hours. A bad key or request fails at once.
+    fallback_models: tuple[str, ...] = ()
 
     def complete(
         self,
@@ -66,8 +75,26 @@ class ChatProvider:
         temperature: float = 0.2,
         max_tokens: int = 1500,
     ) -> Completion:
+        error: ProviderError | None = None
+        for model in (self.model, *self.fallback_models):
+            try:
+                return self._call(model, messages, temperature, max_tokens)
+            except ProviderError as failure:
+                if not failure.transient:
+                    raise
+                error = failure
+        assert error is not None
+        raise error
+
+    def _call(
+        self,
+        model: str,
+        messages: Sequence[Mapping[str, str]],
+        temperature: float,
+        max_tokens: int,
+    ) -> Completion:
         body: dict[str, object] = {
-            "model": self.model,
+            "model": model,
             "messages": list(messages),
             "temperature": temperature,
             "max_tokens": max_tokens,
@@ -89,9 +116,12 @@ class ChatProvider:
                 payload = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as error:
             detail = error.read().decode("utf-8", "replace")[:300]
-            raise ProviderError(f"{self.name} returned HTTP {error.code}: {detail}") from error
+            raise ProviderError(
+                f"{self.name} {model} returned HTTP {error.code}: {detail}",
+                transient=error.code in TRANSIENT_HTTP,
+            ) from error
         except (urllib.error.URLError, TimeoutError, OSError) as error:
-            raise ProviderError(f"{self.name} unreachable: {error}") from error
+            raise ProviderError(f"{self.name} unreachable: {error}", transient=True) from error
         try:
             text = payload["choices"][0]["message"]["content"] or ""
         except (KeyError, IndexError, TypeError) as error:
@@ -99,7 +129,7 @@ class ChatProvider:
         usage = payload.get("usage") or {}
         return Completion(
             text=_strip_thinking(text),
-            model=payload.get("model") or self.model,
+            model=payload.get("model") or model,
             latency_s=round(time.perf_counter() - started, 2),
             prompt_tokens=usage.get("prompt_tokens"),
             completion_tokens=usage.get("completion_tokens"),
@@ -129,6 +159,12 @@ def from_env(env: Mapping[str, str] | None = None) -> ChatProvider | None:
         raise ProviderError(f"provider {name!r} needs SAFETY_LLM_API_KEY")
     timeout = float(env.get("SAFETY_LLM_TIMEOUT_S") or 60)
     reasoning = env.get("SAFETY_LLM_REASONING") or DEFAULT_REASONING.get(name)
+    listed = env.get("SAFETY_LLM_FALLBACK_MODELS")
+    fallbacks = (
+        tuple(m.strip() for m in listed.split(",") if m.strip())
+        if listed is not None
+        else DEFAULT_FALLBACKS.get(name, ())
+    )
     return ChatProvider(
         name=name,
         base_url=base,
@@ -136,4 +172,5 @@ def from_env(env: Mapping[str, str] | None = None) -> ChatProvider | None:
         api_key=key,
         timeout_s=timeout,
         reasoning=reasoning,
+        fallback_models=tuple(m for m in fallbacks if m != model),
     )

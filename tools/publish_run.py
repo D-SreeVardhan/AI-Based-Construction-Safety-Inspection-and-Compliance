@@ -17,7 +17,8 @@ import argparse
 import json
 import shutil
 import sys
-from pathlib import Path
+import tempfile
+from pathlib import Path, PureWindowsPath
 
 from pipeline.output.bundle import validate_bundle
 from shared.schemas.bundle import RUN_MANIFEST_FILE, VIDEO_FILE
@@ -35,11 +36,25 @@ def check(run_dir: Path) -> list[str]:
     return problems
 
 
+def redact(manifest: dict) -> dict:
+    """Keep the workstation's paths (user name, folders) out of anything published."""
+    video = manifest.get("input_video") or {}
+    if video.get("path"):
+        video["path"] = PureWindowsPath(video["path"]).name  # handles / and \
+    diagnostics = manifest.get("diagnostics") or {}
+    if "work_dir" in diagnostics:
+        diagnostics["work_dir"] = "<local>"
+    return manifest
+
+
 def stage(run_dir: Path, target: Path) -> Path:
     destination = target / run_dir.name
     if destination.exists():
         shutil.rmtree(destination)
     shutil.copytree(run_dir, destination, ignore=shutil.ignore_patterns(*SKIP))
+    manifest_path = destination / RUN_MANIFEST_FILE
+    manifest = redact(json.loads(manifest_path.read_text(encoding="utf-8")))
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return destination
 
 
@@ -48,14 +63,15 @@ def upload(run_dir: Path, repo: str, *, private: bool) -> str:
 
     api = HfApi()
     api.create_repo(repo, repo_type="dataset", private=private, exist_ok=True)
-    api.upload_folder(
-        repo_id=repo,
-        repo_type="dataset",
-        folder_path=run_dir,
-        path_in_repo=run_dir.name,
-        ignore_patterns=list(SKIP),
-        commit_message=f"Publish run {run_dir.name}",
-    )
+    with tempfile.TemporaryDirectory() as scratch:
+        staged = stage(run_dir, Path(scratch))  # the redacted copy is what leaves the machine
+        api.upload_folder(
+            repo_id=repo,
+            repo_type="dataset",
+            folder_path=staged,
+            path_in_repo=run_dir.name,
+            commit_message=f"Publish run {run_dir.name}",
+        )
     return f"https://huggingface.co/datasets/{repo}/tree/main/{run_dir.name}"
 
 

@@ -40,7 +40,7 @@ from collections import Counter, defaultdict, deque
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from html import escape
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -284,7 +284,7 @@ def runs() -> list[dict[str, Any]]:
         out.append(
             {
                 "run_id": run_id,
-                "clip": Path(bundle.manifest.input_video.path).name,
+                "clip": PureWindowsPath(bundle.manifest.input_video.path).name,  # / or \
                 "duration_s": round(bundle.duration_s, 1),
                 "incidents": len(bundle.incidents),
                 "completed_at": bundle.manifest.completed_at,

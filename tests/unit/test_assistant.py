@@ -178,3 +178,30 @@ def test_bundle_loads_without_optional_files(tmp_path: Path, bundle: RunBundle) 
     assert bare.insights is None and bare.tracks is None
     assert bare.workers_seen == len({i.canonical_track_id for i in bare.incidents})
     assert RiskAssistant(bare).ask("What are the risks?").text
+
+
+def test_overloaded_models_fall_back_and_bad_keys_fail_fast(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from llm.assistant import providers
+
+    tried: list[str] = []
+
+    def fake_call(self, model, *_args):  # noqa: ANN001, ANN202
+        tried.append(model)
+        if model == "busy":
+            raise ProviderError("503 high demand", transient=True)
+        if model == "badkey":
+            raise ProviderError("401 invalid key")
+        return Completion(text="ok [RUN]", model=model, latency_s=0.1)
+
+    monkeypatch.setattr(providers.ChatProvider, "_call", fake_call)
+    busy = providers.ChatProvider("p", "u", "busy", fallback_models=("spare",))
+    assert busy.complete([]).model == "spare" and tried == ["busy", "spare"]
+    tried.clear()
+    with pytest.raises(ProviderError):
+        providers.ChatProvider("p", "u", "badkey", fallback_models=("spare",)).complete([])
+    assert tried == ["badkey"]  # a bad key is not retried on another model
+    gemini = from_env({"SAFETY_LLM_PROVIDER": "gemini", "SAFETY_LLM_API_KEY": "k"})
+    assert gemini is not None
+    assert gemini.fallback_models == ("gemini-3.6-flash", "gemini-2.5-flash")

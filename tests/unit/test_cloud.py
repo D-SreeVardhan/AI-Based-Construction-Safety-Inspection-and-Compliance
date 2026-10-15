@@ -106,3 +106,16 @@ def test_publishing_refuses_runs_without_face_pixelation(tmp_path: Path) -> None
     job = FakePipelineJob(clip, output_root=tmp_path, run_id="run-raw", skip_video=True)
     job.run()
     assert any("privacy" in problem for problem in check(job.run_dir))
+
+
+def test_published_manifests_carry_no_local_paths() -> None:
+    import json
+
+    from tools.publish_run import redact
+
+    manifest = {
+        "input_video": {"path": r"C:\Users\someone\OneDrive\clips\9.mp4"},
+        "diagnostics": {"work_dir": r"C:\Users\someone\AppData\Local\runs\x", "privacy": "faces"},
+    }
+    clean = json.dumps(redact(manifest))
+    assert "someone" not in clean and '"9.mp4"' in clean and "<local>" in clean
