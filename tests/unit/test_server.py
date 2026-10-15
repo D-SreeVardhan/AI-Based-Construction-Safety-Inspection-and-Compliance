@@ -54,7 +54,16 @@ def test_index_and_process(tmp_path: Path) -> None:
         data = json.loads(response.read().decode("utf-8"))
         assert response.status == 200
         assert data["status"] == "completed"
-        assert [row["rule_id"] for row in data["rule_coverage"]] == ["R1", "R2", "R3", "R4", "R5"]
+        assert [row["rule_id"] for row in data["rule_coverage"]] == [
+            "R1",
+            "R2",
+            "R3",
+            "R4",
+            "R5",
+            "R6",
+            "R7",
+            "R8",
+        ]
     finally:
         httpd.shutdown()
         httpd.server_close()

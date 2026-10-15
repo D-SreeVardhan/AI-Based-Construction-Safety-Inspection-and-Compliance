@@ -18,6 +18,15 @@ class RuleId(StrEnum):
     R3 = "R3"
     R4 = "R4"
     R5 = "R5"
+    R6 = "R6"  # v3: worker down / possible fall
+    R7 = "R7"  # v3: worker under a suspended load
+    R8 = "R8"  # v3: fire or smoke on site
+
+
+class Posture(StrEnum):
+    UPRIGHT = "upright"
+    CROUCHED = "crouched"  # bent, kneeling or squatting: normal work, not a hazard
+    LYING = "lying"
 
 
 class RuleStatus(StrEnum):

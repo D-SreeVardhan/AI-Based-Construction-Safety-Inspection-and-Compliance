@@ -2,7 +2,7 @@
 
 One file, no network, no framework. A sticky top bar and a sidebar of five sections:
 
-* Overview — headline numbers, the 720p replay with an R1–R5 timeline, top priorities;
+* Overview — headline numbers, the 720p replay with a per-rule timeline, top priorities;
 * Incidents — an inbox: the triaged list on the left, the selected incident on the right
   (evidence clip, why it fired, facts, action) with review buttons whose verdicts can be
   exported for `tools/review_incidents.py --import`;
@@ -16,6 +16,7 @@ critical) and is always paired with an icon and a word; every chart has a table 
 
 from __future__ import annotations
 
+import json
 import math
 from collections import Counter
 from collections.abc import Mapping, Sequence
@@ -24,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from pipeline.report import insights_html as v3
+from pipeline.report import twin_viewer
 from pipeline.report.assets import SCRIPT, STYLE
 from shared.enums import RuleId, RuleStatus
 from shared.identity import display_track_label
@@ -51,6 +53,9 @@ RULE_NAMES = {
     RuleId.R3: "Restricted-zone intrusion",
     RuleId.R4: "Machinery proximity",
     RuleId.R5: "Open-edge exposure",
+    RuleId.R6: "Worker down",
+    RuleId.R7: "Under a suspended load",
+    RuleId.R8: "Fire or smoke",
 }
 FALSE_REASONS = (
     ("detection", "Not a person"),
@@ -60,11 +65,20 @@ FALSE_REASONS = (
 MAX_SUBROWS = 4
 NAV = (
     ("overview", "◧", "Overview"),
+    ("twin", "◈", "Digital twin"),
     ("incidents", "⚠", "Incidents"),
     ("indicators", "↗", "Leading indicators"),
     ("site", "⌖", "Site & camera"),
     ("run", "≡", "Run details"),
 )
+
+
+def subject(incident: IncidentRecord) -> str:
+    """Who or what the incident is about: a worker, or the fire/smoke itself (R8)."""
+    label = display_track_label(incident.canonical_track_id or "")
+    if incident.rule_id is RuleId.R8:
+        return f"Fire/smoke {label}"
+    return f"Worker {label}"
 
 
 def _clock(seconds: float) -> str:
@@ -85,6 +99,28 @@ def _card(title: str, body: str, hint: str = "") -> str:
         f'<div class="card"><div class="card-head"><h2>{escape(title)}</h2>{hint_html}</div>'
         f'<div class="card-body">{body}</div></div>'
     )
+
+
+SLOT_HEX = {"critical": "#d03b3b", "serious": "#ec835a", "warning": "#fab219", "good": "#0ca30c"}
+
+
+def _twin_incidents(incidents: Sequence[IncidentRecord]) -> list[dict]:
+    """Incident markers for the 3D twin's timeline (plain data, escaped at embed time)."""
+    rows = []
+    for incident in incidents:
+        slot = SEVERITY.get(incident.severity, ("neutral", "", ""))[0]
+        rows.append(
+            {
+                "id": incident.incident_id,
+                "rule": incident.rule_id.value,
+                "subject": incident.canonical_track_id,
+                "start": round(incident.first_seen_s, 2),
+                "end": round(incident.resolved_at_s, 2) if incident.resolved_at_s else None,
+                "title": incident.title,
+                "color": SLOT_HEX.get(slot, "#8a8983"),
+            }
+        )
+    return rows
 
 
 def _page_head(title: str, text: str, *, actions: str = "") -> str:
@@ -176,9 +212,8 @@ def _span(incident: IncidentRecord, duration: float, y: float, height: float) ->
     end = incident.resolved_at_s if incident.resolved_at_s is not None else duration
     x1 = 60 + 920 * incident.first_seen_s / max(duration, 1e-6)
     x2 = max(x1 + 5, 60 + 920 * end / max(duration, 1e-6))
-    worker = display_track_label(incident.canonical_track_id or "")
     tip = escape(
-        f"<b>{escape(incident.rule_id.value)} · {escape(incident.title)}</b><br>Worker {escape(worker)}"
+        f"<b>{escape(incident.rule_id.value)} · {escape(incident.title)}</b><br>{escape(subject(incident))}"
         f" · {word} · {_clock(incident.first_seen_s)}–{_clock(end)}",
         quote=True,
     )
@@ -195,7 +230,6 @@ def _span(incident: IncidentRecord, duration: float, y: float, height: float) ->
 
 def _row(incident: IncidentRecord) -> str:
     slot, _, word = SEVERITY.get(incident.severity, ("neutral", "●", incident.severity))
-    worker = display_track_label(incident.canonical_track_id or "")
     return (
         f'<div class="row" role="option" tabindex="0" aria-selected="false" '
         f'data-id="{escape(incident.incident_id)}" data-rule="{escape(incident.rule_id.value)}" '
@@ -204,7 +238,7 @@ def _row(incident: IncidentRecord) -> str:
         f'<div class="top"><span class="t">{escape(incident.title or incident.reason_code)}</span>'
         f'<span class="verdict"></span></div>'
         f'<div class="m"><span>{escape(incident.rule_id.value)} · {escape(word)}</span>'
-        f"<span>Worker {escape(worker)}</span><span>{_clock(incident.first_seen_s)}</span>"
+        f"<span>{escape(subject(incident))}</span><span>{_clock(incident.first_seen_s)}</span>"
         f"{v3.quality_dots(incident)}</div></div></div>"
     )
 
@@ -216,7 +250,7 @@ def _detail(incident: IncidentRecord, *, near_wh: float, caution_wh: float) -> s
     span = f"{_clock(incident.first_seen_s)} – {_clock(end) if end is not None else 'end of clip'}"
     duration = (end if end is not None else incident.confirmed_at_s) - incident.first_seen_s
     crop = escape(incident.evidence_crop_path or incident.evidence_path)
-    alt = f"Worker {worker} at the evidence moment for {incident.rule_id.value}"
+    alt = f"{subject(incident)} at the evidence moment for {incident.rule_id.value}"
     if incident.evidence_clip_path:
         media = (
             f'<video src="{escape(incident.evidence_clip_path)}" poster="{escape(incident.evidence_path)}" '
@@ -272,7 +306,7 @@ def _detail(incident: IncidentRecord, *, near_wh: float, caution_wh: float) -> s
     <div>{_chip(slot, icon, word)} <span class="chip">{escape(incident.rule_id.value)} · {escape(RULE_NAMES[incident.rule_id])}</span>
       {heuristic} {v3.quality_chip(incident)}</div>
     <h2>{escape(incident.title or incident.reason_code)}</h2>
-    <div class="muted small">Worker {escape(worker)} · {escape(span)}</div>
+    <div class="muted small">{escape(subject(incident))} · {escape(span)}</div>
   </div>
   <div class="d-body">
     <div>
@@ -370,12 +404,11 @@ def _priorities(incidents: Sequence[IncidentRecord]) -> str:
     items = []
     for incident in top:
         slot, _, word = SEVERITY.get(incident.severity, ("neutral", "●", incident.severity))
-        worker = display_track_label(incident.canonical_track_id or "")
         items.append(
             f'<li data-open="{escape(incident.incident_id)}" style="--sev:var(--{slot})" tabindex="0">'
             f'<span class="bar"></span><div><div class="t">{escape(incident.title)}</div>'
-            f'<div class="muted small">{escape(incident.rule_id.value)} · {escape(word)} · Worker '
-            f"{escape(worker)} · {_clock(incident.first_seen_s)}</div></div>"
+            f'<div class="muted small">{escape(incident.rule_id.value)} · {escape(word)} · '
+            f"{escape(subject(incident))} · {_clock(incident.first_seen_s)}</div></div>"
             f'<span class="muted small">{v3.quality_dots(incident)}</span></li>'
         )
     return f'<ul class="prio">{"".join(items)}</ul>'
@@ -499,6 +532,7 @@ def render_report(
     near_wh: float = 1.5,
     caution_wh: float = 3.0,
     private: bool = True,
+    twin: dict | None = None,
 ) -> str:
     source = manifest.input_video
     duration = source.duration_s or max(
@@ -541,7 +575,7 @@ def render_report(
         else '<p class="empty">No video in this bundle.</p>'
     )
     overview = f"""
-{_page_head("Overview", f"{Path(source.path).name} · {duration:.0f} s of fixed-camera video, checked against R1–R5.")}
+{_page_head("Overview", f"{Path(source.path).name} · {duration:.0f} s of fixed-camera video, checked against eight hazard rules.")}
 <div class="banner"><span aria-hidden="true">!</span><span>{escape(manifest.disclaimer)}</span></div>
 {overview_kpis}
 <div class="grid cols-3-2">
@@ -594,7 +628,7 @@ def render_report(
     )
     run = f"""
 {_page_head("Run details", f"Run {manifest.run_id} · schema {manifest.schema_version}. What each rule could assess, how long each stage took, and what the run lacked.")}
-{_card("Rule coverage", _coverage(manifest), "R1–R5 are always reported, even when a rule could not run")}
+{_card("Rule coverage", _coverage(manifest), "every rule is always reported, even when it could not run")}
 <div class="grid cols-2" style="margin-top:16px">
   {_card("Processing time", _timings(manifest))}
   {_card("Models and provenance", f"<table><tbody>{models}</tbody></table>")}
@@ -625,10 +659,29 @@ def render_report(
         f" · {completed} UTC"
     )
     incidents_page = _incidents_page(incidents, near_wh=near_wh, caution_wh=caution_wh)
+    if twin is not None:
+        twin_page = _page_head(
+            "Digital twin",
+            "The site rebuilt in 3D from the camera: every worker on the calibrated ground "
+            "plane, zones and edges as you configured them, replayed in step with the video.",
+        ) + twin_viewer.section(
+            twin,
+            video,
+            manifest.output_artifacts.get("site_view"),
+            incidents=_twin_incidents(incidents),
+            areas={
+                a.proposal_id: {"exposure": a.exposure_s, "workers": a.workers}
+                for a in (insights.area_exposure if insights else ())
+            },
+        )
+    else:
+        twin_page = _page_head(
+            "Digital twin", "Not available: the camera could not be calibrated for this clip."
+        )
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Site safety report</title><style>{STYLE}</style></head>
+<title>Site safety report</title><style>{STYLE}{twin_viewer.STYLE}</style></head>
 <body data-run="{escape(manifest.run_id)}">
 <header class="topbar"><div class="brand">ST</div>
 <div style="min-width:0"><div class="title">Site safety report</div><div class="meta">{meta}</div></div>
@@ -640,13 +693,15 @@ def render_report(
 triage from video, not legal advice or certified measurement.</div></nav>
 <main>
 <section class="page" id="page-overview">{overview}</section>
+<section class="page" id="page-twin">{twin_page}</section>
 <section class="page" id="page-incidents">{incidents_page}</section>
 <section class="page" id="page-indicators">{indicators}</section>
 <section class="page" id="page-site">{site}</section>
 <section class="page" id="page-run">{run}</section>
 </main></div>
 <div class="tooltip" id="tip" role="tooltip"></div>
-<script>{SCRIPT}</script></body></html>
+{'<script src="' + twin_viewer.THREE_ASSET + '"></script>' if twin is not None else ""}
+<script>{SCRIPT}{twin_viewer.SCRIPT if twin is not None else ""}</script></body></html>
 """
 
 
@@ -658,6 +713,8 @@ def write_report(
     tracks: TracksSummaryFile | None = None,
     **options: Any,
 ) -> Path:
+    if options.get("twin") is not None:
+        twin_viewer.install_assets(path.parent)
     path.write_text(render_report(manifest, incidents, tracks=tracks, **options), encoding="utf-8")
     return path
 
@@ -673,6 +730,7 @@ def rebuild_report(run_dir: Path) -> Path:
         RUN_MANIFEST_FILE,
         SCENE_FILE,
         TRACKS_SUMMARY_FILE,
+        TWIN_FILE,
         IncidentsFile,
     )
     from shared.schemas.scene import SceneCache
@@ -684,6 +742,8 @@ def rebuild_report(run_dir: Path) -> Path:
     insights_path = run_dir / INSIGHTS_FILE
     insights = read_model(insights_path, InsightsFile) if insights_path.is_file() else None
     scene = read_model(run_dir / SCENE_FILE, SceneCache)
+    twin_path = run_dir / TWIN_FILE
+    twin = json.loads(twin_path.read_text(encoding="utf-8")) if twin_path.is_file() else None
     labels = {
         p.proposal_id: p.label or p.proposal_id
         for proposals in scene.shot_proposals.values()
@@ -699,4 +759,5 @@ def rebuild_report(run_dir: Path) -> Path:
         near_wh=config.rules.r4_near_max_wh,
         caution_wh=config.rules.r4_caution_max_wh,
         private=manifest.diagnostics.get("privacy", config.render.privacy) == "faces",
+        twin=twin,
     )

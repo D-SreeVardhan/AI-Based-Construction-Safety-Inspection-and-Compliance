@@ -26,6 +26,9 @@ RULE_NAMES = {
     "R3": "Restricted zone",
     "R4": "Machinery proximity",
     "R5": "Open edge",
+    "R6": "Worker down",
+    "R7": "Suspended load",
+    "R8": "Fire or smoke",
 }
 
 
@@ -317,6 +320,7 @@ per-clip track IDs that mean nothing outside this video.</li>
 <li>Every incident is a prompt for a person to check, not a verdict. Weak-evidence incidents are
 listed separately under <i>Verify first</i>. Nothing here is legal advice or certified measurement.</li>
 <li>Monitored: R1 helmets, R2 hi-vis in movement areas, R3 restricted zones, R4 machinery proximity,
-R5 open edges. Not monitored: behaviour, productivity, emotions, anything outside the camera's view.</li>
+R5 open edges, R6 a worker down, R7 workers under a suspended load, R8 fire or smoke. Not
+monitored: behaviour, productivity, emotions, anything outside the camera's view.</li>
 <li>Rules can be re-evaluated on this footage with new zones or settings
 (<code>safety-twin reprocess</code>) without re-running detection.</li></ul>"""

@@ -256,6 +256,9 @@ class _PaneRenderer:
             "output": output,
             "machine_states": self.pass2.machine_states.get(record.frame_index, {}),
             "machinery_classes": frozenset(self.config.stage1.machinery_classes),
+            "positions": dict(self.pass2.twin.positions_at(record.frame_index))
+            if self.pass2.twin is not None
+            else None,
         }
         if self.calibrated and self.worker is not None:
             self.worker.submit(**inputs)

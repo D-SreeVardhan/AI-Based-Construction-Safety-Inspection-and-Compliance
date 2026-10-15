@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.metadata
+import json
 import math
 import shutil
 import time
@@ -47,6 +48,7 @@ from pipeline.mapping.frame_context import FrameContextBuilder
 from pipeline.mapping.stitching import StitchedStore, appearance_from_video, stitch
 from pipeline.output.bundle import read_model, validate_bundle, write_model
 from pipeline.output.summaries import TrackSummaryBuilder
+from pipeline.output.twin_data import TwinRecorder
 from pipeline.report.html import write_report
 from pipeline.rules.catalogue import load_catalogue
 from pipeline.rules.engine import RuleEngine
@@ -59,6 +61,7 @@ from pipeline.scene.site_config import (
 from pipeline.scene.zone_health import REVIEW_THRESHOLD, median_background, zone_change
 from pipeline.vision.detector import Stage1Detector, file_sha256, resolve_weights
 from pipeline.vision.pass1 import Pass1Summary, VisionPass, summary_from_store
+from pipeline.vision.posture import PoseVerifier, resolve_pose_weights
 from pipeline.vision.ppe_model import PPEClassifier
 from pipeline.vision.tracker import ByteTrackAdapter
 from shared.config import AppConfig, load_config
@@ -72,6 +75,7 @@ from shared.schemas.bundle import (
     RUN_MANIFEST_FILE,
     SCENE_FILE,
     TRACKS_SUMMARY_FILE,
+    TWIN_FILE,
     VIDEO_FILE,
     VIDEO_PROXY_FILE,
     IncidentsFile,
@@ -175,6 +179,8 @@ class ProcessJob:
         self.keyframes: list[np.ndarray] = []
         self.zone_health: dict[str, float] = {}
         self.stitching: dict[str, int] = {}
+        self.posture_available = False
+        self.detector_classes: list[str] = []
 
     def run(self) -> RunManifest:
         if self.run_dir.exists():
@@ -281,12 +287,20 @@ class ProcessJob:
             sorted(set(detector.classes.values()) - set(self.config.stage1.evidence_classes)),
         )
         ppe = self._ppe_classifier(detector.device)
+        pose_weights = resolve_pose_weights(self.config.pose.model_path, self.root)
+        pose = PoseVerifier(pose_weights, detector.device) if pose_weights else None
+        if pose is None:
+            self.warnings.append("pose model missing: R6 judges posture from box shape only")
         store = Pass1Store(self.work_dir / "pass1.sqlite")
         expected = max(1, round(metadata.duration_s * self.config.intake.target_fps))
-        pass1 = VisionPass(detector, tracker, self.config, camera_mode=decision.mode, ppe=ppe).run(
-            source, store, progress=self._progress("detect", expected)
-        )
+        pass1 = VisionPass(
+            detector, tracker, self.config, camera_mode=decision.mode, ppe=ppe, pose=pose
+        ).run(source, store, progress=self._progress("detect", expected))
+        store.set_meta("posture", True)
+        store.set_meta("hazard_classes", sorted(set(detector.classes.values())))
         stage1_id = f"{weights.name}:{detector.model_sha256()[:16]}"
+        self.posture_available = True
+        self.detector_classes = sorted(set(detector.classes.values()))
         store.set_meta("detector_sha256", detector.model_sha256())
         store.set_meta("stage1_id", stage1_id)
         store.set_meta("ppe_id", self.model_ids.get("ppe"))
@@ -316,6 +330,8 @@ class ProcessJob:
         store = Pass1Store(self.work_dir / "pass1.sqlite")
         if not store.complete:
             raise PipelineError("REUSE_INCOMPLETE", f"{source_store} is not a finished pass 1")
+        self.posture_available = bool(store.meta("posture", False))
+        self.detector_classes = store.meta("hazard_classes", [])
         recorded = store.meta("pass1_summary")
         pass1 = Pass1Summary(**recorded) if recorded else summary_from_store(store)
         stage1_id = store.meta("stage1_id") or previous.model_ids.get("stage1", "unknown")
@@ -354,6 +370,24 @@ class ProcessJob:
             f"identities ({len(result.links)} links)"
         )
         return StitchedStore(store, result.mapping)
+
+    def _twin_export(self, pass2: Pass2Result, scene: SceneCache) -> dict | None:
+        """The calibrated shot's ground-plane twin for the report's 3D viewer."""
+        accepted = [(shot, fit) for shot, fit in self.plane_fits.items() if fit.accepted]
+        if pass2.twin is None or not accepted:
+            return None
+        shot, fit = accepted[0]
+        mapper = GroundMapper(fit)
+        parameters = fit.parameters
+        camera = {
+            "height_wh": round(parameters.height_wh, 3),
+            "tilt_deg": round(math.degrees(parameters.tilt_rad), 2),
+            "roll_deg": round(math.degrees(parameters.roll_rad), 2),
+            "support": [[round(x, 3), round(y, 3)] for x, y in (fit.support_polygon or [])],
+        }
+        return pass2.twin.export(
+            proposals=scene.proposals_for(shot), ground=mapper.ground, camera=camera
+        )
 
     def _progress(self, label: str, expected: int) -> Callable[..., None]:
         last = [0.0]
@@ -521,9 +555,19 @@ class ProcessJob:
             },
             rules=self.config.rules,
             seed=self.config.uncertainty.seed,
+            hazard_classes=[
+                c for c in self.config.stage1.hazard_classes if c in self.detector_classes
+            ],
+            posture_available=self.posture_available,
         )
         engine = RuleEngine(run_id=self.run_id, config=self.config.rules)
-        return run_pass2(store, builder, engine, TrackSummaryBuilder(self.run_id))
+        return run_pass2(
+            store,
+            builder,
+            engine,
+            TrackSummaryBuilder(self.run_id),
+            TwinRecorder(fps=self.config.intake.target_fps),
+        )
 
     def _publish(
         self,
@@ -569,6 +613,12 @@ class ProcessJob:
             artifacts["heatmap"] = rendered.heatmap
         if rendered.site_view:
             artifacts["site_view"] = rendered.site_view
+        twin = self._twin_export(pass2, scene)
+        if twin is not None:
+            (self.run_dir / TWIN_FILE).write_text(
+                json.dumps(twin, separators=(",", ":")), encoding="utf-8"
+            )
+            artifacts["twin"] = TWIN_FILE
         manifest = RunManifest(
             run_id=self.run_id,
             status=ProcessingStatus.COMPLETED,
@@ -647,6 +697,7 @@ class ProcessJob:
             near_wh=self.config.rules.r4_near_max_wh,
             caution_wh=self.config.rules.r4_caution_max_wh,
             private=self.config.render.privacy == "faces",
+            twin=twin,
         )
         check = validate_bundle(self.run_dir, require_media=True)
         if not check.ok:

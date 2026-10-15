@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pydantic import Field
 
-from shared.coordinates import DistanceInterval, StrictModel
+from shared.coordinates import Box2, DistanceInterval, StrictModel
 from shared.enums import PERSON_CLASS, AlertState, DistanceBand, OperatingState, RuleId
 from shared.schemas.geometry import MachineryFootprintRecord
 from shared.schemas.incidents import RuleResult
@@ -28,6 +28,18 @@ class FeedCapabilities(StrictModel):
     ppe_classification: bool = True
     scene_state: bool = True
     relative_plane: bool = True
+    # v3: posture judged on this feed (R6), and which hazard classes the detector knows (R7/R8).
+    posture: bool = False
+    hazard_classes: tuple[str, ...] = ()
+
+
+class HazardObject(StrictModel):
+    """A detected hazard that is not a worker or machine: suspended load, fire, smoke."""
+
+    object_id: str
+    class_name: str
+    box_reference: Box2
+    confidence: float | None = None
 
 
 class ZoneMembership(StrictModel):
@@ -70,6 +82,7 @@ class FrameContext(StrictModel):
     zone_memberships: tuple[ZoneMembership, ...] = ()
     machinery_proximities: tuple[MachineryProximity, ...] = ()
     edge_proximities: tuple[EdgeProximity, ...] = ()
+    hazards: tuple[HazardObject, ...] = ()
 
     def workers(self) -> tuple[MappedTrackRecord, ...]:
         return tuple(track for track in self.tracks if track.object_class == PERSON_CLASS)

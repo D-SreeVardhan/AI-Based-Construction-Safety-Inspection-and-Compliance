@@ -18,6 +18,8 @@ stage1:
   pretrained_fallback: artifacts/models/pretrained/yoloe-26l-construction.pt
   class_map: yoloe_construction
   machinery_classes: [machinery, vehicle]
+  # Tracked hazards that are neither workers nor machinery (R7 suspended load, R8 fire/smoke).
+  hazard_classes: [suspended_load, fire, smoke]
   # Detected but never tracked: used as supporting evidence for other stages.
   evidence_classes: [helmet]
   image_size: 960
@@ -109,6 +111,13 @@ rules:
   r3_debounce_seconds: 1.0
   r4_debounce_seconds: 1.0
   r5_debounce_seconds: 1.0
+  # v3: R6 worker down (lying for this long), R7 under a suspended load, R8 fire or smoke.
+  r6_debounce_seconds: 3.0
+  r7_debounce_seconds: 1.0
+  r8_debounce_seconds: 2.0
+  r7_min_confidence: 0.35
+  # Fire/smoke must be confident: orange netting and dust are easy to mistake for it.
+  r8_min_confidence: 0.45
   resolution_hysteresis_seconds: 2.0
   cooldown_seconds: 30.0
   missing_observation_grace_seconds: 0.25

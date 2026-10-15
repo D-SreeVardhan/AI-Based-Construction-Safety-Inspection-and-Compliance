@@ -41,6 +41,7 @@ REPORT_FILE = "report.html"
 INSIGHTS_FILE = "insights.json"  # v3, optional: leading indicators (shared/schemas/insights.py)
 HEATMAP_FILE = "exposure_heatmap.jpg"  # v3, optional
 SITE_VIEW_FILE = "site_view.jpg"  # v3, optional: the camera view with the configured zones
+TWIN_FILE = "twin.json"  # v3, optional: smoothed ground-plane paths for the 3D twin viewer
 EVIDENCE_DIR = "evidence"
 
 REQUIRED_FILES = (RUN_MANIFEST_FILE, INCIDENTS_FILE, TRACKS_SUMMARY_FILE, SCENE_FILE)

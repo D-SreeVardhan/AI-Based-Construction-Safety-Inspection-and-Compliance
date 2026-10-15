@@ -25,6 +25,7 @@ from pipeline.intake.geometry_gate import CameraMode, ShotCutDetector
 from pipeline.intake.prefetch import Prefetch
 from pipeline.intake.stabilization import AffineFit, ReferenceMatcher, apply_to_points
 from pipeline.vision.detector import Detection, Stage1Detector
+from pipeline.vision.posture import PoseVerifier, decide, posture_from_box
 from pipeline.vision.ppe_model import PPEClassifier, PPEPrediction
 from pipeline.vision.ppe_temporal import TemporalPPEFilter
 from pipeline.vision.tracker import ByteTrackAdapter, TrackedObject
@@ -160,8 +161,10 @@ class VisionPass:
         *,
         camera_mode: CameraMode,
         ppe: PPEClassifier | None = None,
+        pose: PoseVerifier | None = None,
     ) -> None:
         self.detector = detector
+        self.pose = pose
         self.tracker = tracker
         self.config = config
         self.camera_mode = camera_mode
@@ -354,6 +357,7 @@ class VisionPass:
         if crops and self.ppe is not None:
             predictions = dict(zip(owners, self.ppe.predict(crops), strict=True))
         summary.ppe_s += time.perf_counter() - tick
+        postures = self._postures(staged)
 
         for position, item in enumerate(staged):
             observations = []
@@ -388,6 +392,7 @@ class VisionPass:
                         ppe,
                         item.energy.get(tracked.track_id),
                         interpolated=item.interpolated,
+                        posture=postures.get((position, tracked.track_id)),
                     )
                 )
             stored = time.perf_counter()
@@ -414,6 +419,38 @@ class VisionPass:
             if progress is not None:
                 progress(summary.frames, item.frame.time_s)
         staged.clear()
+
+    def _postures(self, staged: list[_Staged]) -> dict[tuple[int, int], str]:
+        """Posture per person on detection frames; pose model only for lying candidates."""
+        postures: dict[tuple[int, int], str] = {}
+        candidates = []
+        for position, item in enumerate(staged):
+            if item.interpolated:
+                continue
+            height, width = item.frame.image.shape[:2]
+            for tracked in item.tracked:
+                d = tracked.detection
+                if d.class_name != PERSON_CLASS:
+                    continue
+                box_posture = posture_from_box(d.x2 - d.x1, d.y2 - d.y1)
+                if box_posture is not None:
+                    postures[(position, tracked.track_id)] = box_posture.value
+                    continue
+                pad_x, pad_y = 0.2 * (d.x2 - d.x1), 0.4 * (d.y2 - d.y1)
+                crop = item.frame.image[
+                    max(0, int(d.y1 - pad_y)) : min(height, int(d.y2 + pad_y)),
+                    max(0, int(d.x1 - pad_x)) : min(width, int(d.x2 + pad_x)),
+                ]
+                aspect = (d.y2 - d.y1) / max(d.x2 - d.x1, 1e-6)
+                candidates.append(((position, tracked.track_id), crop, aspect))
+        verdicts = (
+            self.pose.lying([crop for _, crop, _ in candidates])
+            if self.pose is not None and candidates
+            else [None] * len(candidates)
+        )
+        for (key, _, aspect), verdict in zip(candidates, verdicts, strict=True):
+            postures[key] = decide(None, verdict, aspect).value
+        return postures
 
     def _assessable(self, detection: Detection) -> bool:
         """PPE bands assume an upright worker of useful size (v7 §8.2 `unknown` cases)."""
@@ -463,6 +500,7 @@ class VisionPass:
         motion_energy: float | None = None,
         *,
         interpolated: bool = False,
+        posture: str | None = None,
     ) -> Pass1TrackObservation:
         d = item.detection
         oriented = Box2(x1=d.x1, y1=d.y1, x2=d.x2, y2=d.y2, space=CoordinateSpace.ORIENTED)
@@ -496,4 +534,5 @@ class VisionPass:
             box_oriented=oriented,
             motion_energy=motion_energy,
             interpolated=interpolated,
+            posture=posture if item.detection.class_name == PERSON_CLASS else None,
         )

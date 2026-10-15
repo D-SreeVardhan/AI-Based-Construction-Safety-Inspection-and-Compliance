@@ -5,7 +5,7 @@
     | [ annotated source 940x529 ]        [ 2.5D twin 940x529 ]               |
     | incident cards: severity, title, live elapsed time, action, crop       |
     | timeline: one lane per rule, incident spans by severity, playhead      |
-    | coverage chips R1-R5 · disclaimer                                      |
+    | coverage chips (every rule) · disclaimer                               |
     +------------------------------------------------------------------------+
 
 Cards appear from an incident's *confirmation* time and say how long it has lasted *so
@@ -219,7 +219,9 @@ class Compositor:
         return 1200.0
 
     def _lane_y(self, lane: int) -> int:
-        return self.timeline_top + 38 + lane * 19
+        # Lanes share the timeline band evenly (19 px for five rules, ~12 px for eight).
+        step = min(19.0, (TIMELINE_H - 54) / max(len(RuleId) - 1, 1))
+        return int(round(self.timeline_top + 38 + lane * step))
 
     def _x(self, time_s: float) -> int:
         fraction = min(max(time_s / self.duration_s, 0.0), 1.0)

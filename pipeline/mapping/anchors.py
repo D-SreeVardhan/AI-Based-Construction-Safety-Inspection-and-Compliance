@@ -46,4 +46,6 @@ def image_aligned_record(
         vest=observation.vest,
         operating_state=None,
         mapping_mode=IMAGE_ALIGNED,
+        box_reference=observation.box_oriented or observation.box_reference,
+        posture=observation.posture,
     )

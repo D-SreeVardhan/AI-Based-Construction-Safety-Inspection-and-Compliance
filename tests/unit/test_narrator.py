@@ -64,3 +64,14 @@ def test_garbage_is_not_json() -> None:
     [narration] = narrate([FACTS], ["Sure! Here is the briefing"], None)
     assert narration.source == "template"
     assert narration.failed_checks == ("shape",)
+
+
+def test_gendered_pronouns_are_rejected() -> None:
+    raw = _reply(
+        "Worker 7 was seen without his helmet from 12.5 s for 4.0 s.",
+        "Video can show a missing helmet but not why it was removed.",
+        "Pause the task and check that worker 7 is wearing head protection.",
+    )
+    [narration] = narrate([FACTS], [raw], None)
+    assert narration.source == "template"
+    assert "tone" in narration.failed_checks

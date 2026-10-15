@@ -39,6 +39,11 @@ VOCABULARY: dict[str, str] = {
     "dump truck": "vehicle",
     "truck": "vehicle",
     "car": "vehicle",
+    # v3 hazards
+    "crane hook": "suspended_load",
+    "suspended load": "suspended_load",
+    "fire": "fire",
+    "smoke": "smoke",
 }
 
 

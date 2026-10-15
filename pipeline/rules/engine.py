@@ -1,4 +1,4 @@
-"""R1–R5 rule engine: per-frame evaluation, temporal control and incident assembly.
+"""R1–R8 rule engine: per-frame evaluation, temporal control and incident assembly.
 
 The engine is deterministic and model-free. It consumes `FrameContext`s in time order and
 produces:
@@ -29,6 +29,9 @@ from pipeline.rules.r2 import R2MissingHiVis
 from pipeline.rules.r3 import R3RestrictedZone
 from pipeline.rules.r4 import R4MachineryProximity
 from pipeline.rules.r5 import R5FallEdge
+from pipeline.rules.r6 import R6WorkerDown
+from pipeline.rules.r7 import R7SuspendedLoad
+from pipeline.rules.r8 import R8FireSmoke
 from pipeline.rules.temporal import (
     Episode,
     EvidenceSample,
@@ -67,6 +70,9 @@ def build_evaluators(config: RulesConfig, catalogue: CompiledCatalogue) -> list[
         R3RestrictedZone(basis=basis(RuleId.R3)),
         R4MachineryProximity(basis=basis(RuleId.R4)),
         R5FallEdge(basis=basis(RuleId.R5), edge_max_wh=config.r5_edge_max_wh),
+        R6WorkerDown(basis=basis(RuleId.R6)),
+        R7SuspendedLoad(basis=basis(RuleId.R7), min_confidence=config.r7_min_confidence),
+        R8FireSmoke(basis=basis(RuleId.R8), min_confidence=config.r8_min_confidence),
     ]
 
 
@@ -77,6 +83,9 @@ def temporal_params(config: RulesConfig) -> dict[RuleId, TemporalParams]:
         RuleId.R3: config.r3_debounce_seconds,
         RuleId.R4: config.r4_debounce_seconds,
         RuleId.R5: config.r5_debounce_seconds,
+        RuleId.R6: config.r6_debounce_seconds,
+        RuleId.R7: config.r7_debounce_seconds,
+        RuleId.R8: config.r8_debounce_seconds,
     }
     return {
         rule_id: TemporalParams(
@@ -288,7 +297,13 @@ class RuleEngine:
                 None,
             )
             local = display_track_label(result.object_id)
-            object_label = f"{machine.class_name} {local}" if machine else f"machine {local}"
+            hazard = next((h for h in context.hazards if h.object_id == result.object_id), None)
+            if machine is not None:
+                object_label = f"{machine.class_name} {local}"
+            elif hazard is not None:
+                object_label = f"{hazard.class_name.replace('_', ' ')} {local}"
+            else:
+                object_label = f"machine {local}"
         if result.distance is not None:
             score = -result.distance.median_wh  # closest approach is the best evidence
         else:

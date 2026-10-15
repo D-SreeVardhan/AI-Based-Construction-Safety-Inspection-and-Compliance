@@ -3,7 +3,7 @@
 # from the map is an error rather than silently mapped.
 schema_version: 1
 # `helmet` is evidence only: detected hard hats support the PPE head, they are never tracked.
-taxonomy: [person, machinery, vehicle, helmet]
+taxonomy: [person, machinery, vehicle, helmet, suspended_load, fire, smoke]
 maps:
   # Pretrained COCO weights: the Phase 2 baseline. COCO has no construction machinery.
   coco_pretrained:
@@ -34,4 +34,9 @@ maps:
       dump truck: vehicle
       truck: vehicle
       car: vehicle
+      # v3 hazards: what hangs from a crane (R7) and fire or smoke (R8).
+      crane hook: suspended_load
+      suspended load: suspended_load
+      fire: fire
+      smoke: smoke
   # Frozen after profiling the Roboflow Construction Site Safety v27 export (Phase 3).

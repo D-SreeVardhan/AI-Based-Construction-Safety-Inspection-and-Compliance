@@ -15,4 +15,4 @@ def test_status_entrypoint(capsys: CaptureFixture[str]) -> None:
 
 
 def test_rule_ids_are_complete() -> None:
-    assert [item.value for item in RuleId] == ["R1", "R2", "R3", "R4", "R5"]
+    assert [item.value for item in RuleId] == ["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8"]

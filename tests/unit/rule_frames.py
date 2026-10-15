@@ -213,6 +213,7 @@ def frame(
     memberships: tuple[ZoneMembership, ...] = (),
     proximities: tuple[MachineryProximity, ...] = (),
     edges: tuple[EdgeProximity, ...] = (),
+    hazards: tuple = (),
     run_id: str = "run-test",
 ) -> FrameContext:
     return FrameContext(
@@ -228,6 +229,7 @@ def frame(
         zone_memberships=memberships,
         machinery_proximities=proximities,
         edge_proximities=edges,
+        hazards=hazards,
     )
 
 

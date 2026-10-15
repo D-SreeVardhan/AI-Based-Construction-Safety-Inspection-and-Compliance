@@ -1,0 +1,77 @@
+"""R7 — worker under a suspended load (v3).
+
+Struck-by from a dropped load is one of construction's fatal four. The detector finds the
+crane hook or the load hanging from it; the drop zone is everything directly beneath it.
+A hanging load has no ground contact to calibrate from, so the test is in image space and
+deliberately generous: a worker whose box overlaps the load's horizontal extent (widened
+by `SIDE_MARGIN` either side, since loads swing) and who stands below it in the frame,
+within `MAX_DROP_HEIGHTS` load heights. Heuristic by design; the evidence grade and the
+review loop catch the cases perspective gets wrong.
+"""
+
+from __future__ import annotations
+
+from pipeline.rules.base import ResultFactory, most_relevant
+from shared.enums import RuleId, RuleStatus
+from shared.schemas.frame import FrameContext, HazardObject
+from shared.schemas.incidents import RuleResult
+
+ALERT_REASON = "worker_under_suspended_load"
+LOAD_CLASS = "suspended_load"
+SIDE_MARGIN = 0.25  # of the load's width
+MAX_DROP_HEIGHTS = 8.0
+
+
+def beneath(worker_box, load: HazardObject) -> bool:
+    lb = load.box_reference
+    width = lb.x2 - lb.x1
+    left, right = lb.x1 - SIDE_MARGIN * width, lb.x2 + SIDE_MARGIN * width
+    overlaps = worker_box.x2 > left and worker_box.x1 < right
+    below = worker_box.y2 > lb.y2
+    near = worker_box.y1 - lb.y2 <= MAX_DROP_HEIGHTS * max(lb.y2 - lb.y1, 1.0)
+    return overlaps and below and near
+
+
+class R7SuspendedLoad:
+    rule_id = RuleId.R7
+
+    def __init__(self, *, basis: str, min_confidence: float) -> None:
+        self.basis = basis
+        self.min_confidence = min_confidence
+
+    def evaluate(self, context: FrameContext) -> list[RuleResult]:
+        make = ResultFactory(self.rule_id, self.basis, context)
+        if LOAD_CLASS not in context.capabilities.hazard_classes:
+            return make.frame(RuleStatus.UNSUPPORTED, "suspended_load_detection_unavailable")
+        loads = [
+            h
+            for h in context.hazards
+            if h.class_name == LOAD_CLASS and (h.confidence or 0.0) >= self.min_confidence
+        ]
+        if not loads:
+            return make.frame(RuleStatus.NOT_APPLICABLE, "no_suspended_load_observed")
+        workers = context.workers()
+        if not workers:
+            return make.frame(RuleStatus.NOT_APPLICABLE, "no_person_tracks")
+        results = []
+        for worker in workers:
+            track_id = worker.canonical_track_id
+            if worker.box_reference is None:
+                results.append(
+                    make.make(RuleStatus.INCONCLUSIVE, "worker_box_unavailable", track_id=track_id)
+                )
+                continue
+            per_load = []
+            for load in loads:
+                hit = beneath(worker.box_reference, load)
+                per_load.append(
+                    make.make(
+                        RuleStatus.EVALUATED_ALERT if hit else RuleStatus.EVALUATED_CLEAR,
+                        ALERT_REASON if hit else "not_beneath_load",
+                        track_id=track_id,
+                        object_id=load.object_id,
+                        confidence=load.confidence,
+                    )
+                )
+            results.append(most_relevant(per_load))
+        return results

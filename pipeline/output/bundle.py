@@ -75,7 +75,7 @@ def validate_bundle(run_dir: Path, *, require_media: bool = False) -> BundleChec
 
     covered = [entry.rule_id for entry in manifest.rule_coverage]
     if covered != list(RuleId):
-        check.problems.append(f"rule coverage must list R1–R5 in order, got {covered}")
+        check.problems.append(f"rule coverage must list every rule in order, got {covered}")
 
     known_tracks = {track.canonical_track_id for track in tracks.tracks}
     for incident in incidents.incidents:

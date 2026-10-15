@@ -192,6 +192,21 @@ def draw_tracks(
         x1, y1 = round(box.x1 * scale), round(box.y1 * scale)
         x2, y2 = round(box.x2 * scale), round(box.y2 * scale)
         label = display_track_label(observation.canonical_track_id)
+        if observation.object_class in HAZARD_LABELS:
+            # A hazard in its own right (R7/R8): drawn loud, labelled by what it is.
+            cv2.rectangle(image, (x1, y1), (x2, y2), style.CRITICAL, 3, cv2.LINE_AA)
+            _label(
+                image,
+                placer,
+                f"⚠ {HAZARD_LABELS[observation.object_class]}",
+                x1,
+                y1,
+                style.CRITICAL,
+                style.readable_on(style.CRITICAL),
+                size=12,
+                force=True,
+            )
+            continue
         if observation.object_class != PERSON_CLASS:
             cv2.rectangle(image, (x1, y1), (x2, y2), MACHINE, 2, cv2.LINE_AA)
             kind = "Machine" if observation.object_class == "machinery" else "Vehicle"
@@ -253,6 +268,7 @@ def _label(
 
 
 NEAR_WHITE = style.hex_bgr("#E8EEF4")
+HAZARD_LABELS = {"suspended_load": "Suspended load", "fire": "Fire", "smoke": "Smoke"}
 
 
 def draw_hud(image: np.ndarray, time_s: float, *, heading: str = "") -> None:

@@ -29,7 +29,13 @@ from pipeline.mapping.zones import ZoneIndex, anchor_sigma_px
 from shared.config import RulesConfig
 from shared.coordinates import Point2
 from shared.enums import PERSON_CLASS, CoordinateSpace, DistanceBand, OperatingState
-from shared.schemas.frame import EdgeProximity, FeedCapabilities, FrameContext, MachineryProximity
+from shared.schemas.frame import (
+    EdgeProximity,
+    FeedCapabilities,
+    FrameContext,
+    HazardObject,
+    MachineryProximity,
+)
 from shared.schemas.geometry import MachineryFootprintRecord
 from shared.schemas.scene import ProposalType, SceneCache
 from shared.schemas.tracks import MappedTrackRecord, Pass1TrackObservation
@@ -54,12 +60,16 @@ class FrameContextBuilder:
         rules: RulesConfig | None = None,
         inflation_wh: Mapping[str, float] | None = None,
         seed: int = 42017,
+        hazard_classes: Sequence[str] = (),
+        posture_available: bool = False,
     ) -> None:
         self.run_id = run_id
         self.scene = scene
         self.geometry_supported = geometry_supported
         self.ppe_available = ppe_available
         self.machinery_classes = frozenset(machinery_classes)
+        self.hazard_classes = tuple(hazard_classes)
+        self.posture_available = posture_available
         self.mappers = dict(mappers or {}) if geometry_supported else {}
         self.rules = rules
         self.inflation = dict(inflation_wh or DEFAULT_INFLATION_WH)
@@ -77,6 +87,16 @@ class FrameContextBuilder:
         mapper = self.mappers.get(frame.shot_id) if geometry else None
         workers = [o for o in observations if o.object_class == PERSON_CLASS]
         machines = [o for o in observations if o.object_class in self.machinery_classes]
+        hazards = tuple(
+            HazardObject(
+                object_id=o.canonical_track_id,
+                class_name=o.object_class,
+                box_reference=o.box_oriented or o.box_reference,
+                confidence=o.confidence,
+            )
+            for o in observations
+            if o.object_class in self.hazard_classes
+        )
         proposals = self.scene.proposals_for(frame.shot_id)
         has_scene = frame.shot_id in self.scene.shot_proposals
 
@@ -94,11 +114,14 @@ class FrameContextBuilder:
                     ppe_classification=self.ppe_available,
                     scene_state=has_scene,
                     relative_plane=False,
+                    posture=self.posture_available,
+                    hazard_classes=self.hazard_classes,
                 ),
                 tracks=mapped,
                 machinery=machinery,
                 scene_proposals=proposals,
                 zone_memberships=memberships,
+                hazards=hazards,
             )
 
         rng = np.random.default_rng(self.seed + frame.frame_index)
@@ -121,7 +144,10 @@ class FrameContextBuilder:
                 ppe_classification=self.ppe_available,
                 scene_state=has_scene,
                 relative_plane=True,
+                posture=self.posture_available,
+                hazard_classes=self.hazard_classes,
             ),
+            hazards=hazards,
             tracks=mapped,
             machinery=tuple(machine_records),
             scene_proposals=proposals,

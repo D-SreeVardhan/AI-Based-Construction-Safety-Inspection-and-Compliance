@@ -54,7 +54,12 @@ ACTION_SUBJECT = {
     "R3": ("zone", "area", "boundary", "entry", "exclusion", "barrier"),
     "R4": ("machine", "plant", "operator", "separation", "distance", "equipment", "clear"),
     "R5": ("edge", "fall", "protection", "guard", "access", "rail"),
+    "R6": ("worker", "first aid", "respond", "check", "help", "medical"),
+    "R7": ("load", "lift", "clear", "crane", "beneath", "under"),
+    "R8": ("fire", "smoke", "alarm", "evacuat", "area"),
 }
+# Workers are known only by track number: a gendered pronoun is an invented fact.
+GENDERED = re.compile(r"\b(he|him|his|himself|she|her|hers|herself)\b", re.I)
 
 
 @dataclass
@@ -133,6 +138,8 @@ def check(raw: str, facts: NarrationFacts) -> GuardrailResult:
         failures.append("tone: certainty the video evidence cannot carry")
     if facts.severity in ("high", "critical") and DOWNPLAY.search(text):
         failures.append("tone: downplays a high-severity observation")
+    if GENDERED.search(text):
+        failures.append("tone: gendered pronoun for a worker known only by number")
 
     return GuardrailResult(not failures, failures, narration if not failures else None)
 

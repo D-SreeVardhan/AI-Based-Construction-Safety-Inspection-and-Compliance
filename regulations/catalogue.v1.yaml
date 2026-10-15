@@ -81,3 +81,42 @@ rules:
       - BOCW Rule 42(6)
       - BOCW Rule 2(u)
       - BOCW Rule 179
+
+  # ---- v3: hazards beyond PPE and zones. Heuristic, no statutory reference attached
+  # until each is verified against its source (reference_status above).
+
+  - rule_id: R6
+    title: Possible worker down
+    basis: heuristic
+    severity: critical
+    alert_reason_code: worker_lying_on_ground
+    observation_template: >-
+      Worker {track_id} was observed lying on the ground for {duration_s}s.
+    action_code: CHECK_ON_WORKER
+    action_template: >-
+      Check on the worker now; if they do not respond, call first aid and do not move them.
+    references: []
+
+  - rule_id: R7
+    title: Worker under a suspended load
+    basis: heuristic
+    severity: critical
+    alert_reason_code: worker_under_suspended_load
+    observation_template: >-
+      Worker {track_id} was beneath {machine_label} for {duration_s}s.
+    action_code: CLEAR_LOAD_PATH
+    action_template: >-
+      Stop the lift and keep everyone clear of the area under the load.
+    references: []
+
+  - rule_id: R8
+    title: Possible fire or smoke
+    basis: visual
+    severity: critical
+    alert_reason_code: fire_or_smoke_visible
+    observation_template: >-
+      Possible fire or smoke was visible for {duration_s}s.
+    action_code: RAISE_FIRE_ALARM
+    action_template: >-
+      Check the area now and follow the site fire procedure; keep workers away.
+    references: []

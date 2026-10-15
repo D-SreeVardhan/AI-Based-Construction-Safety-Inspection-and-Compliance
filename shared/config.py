@@ -32,6 +32,8 @@ class Stage1Config(StrictModel):
     maximum_detections: int
     batch_size: int
     device: str
+    # v3: tracked hazard objects (not workers or machinery) used by R7/R8.
+    hazard_classes: tuple[str, ...] = ("suspended_load", "fire", "smoke")
     # Run the detector on every n-th processed frame; the tracker's boxes are interpolated
     # in between (pass one is offline, so both neighbours are known).
     detect_every_frames: int = Field(default=1, ge=1, le=4)
@@ -110,6 +112,12 @@ class RulesConfig(StrictModel):
     r3_debounce_seconds: float
     r4_debounce_seconds: float
     r5_debounce_seconds: float
+    # v3 rules.
+    r6_debounce_seconds: float = 3.0
+    r7_debounce_seconds: float = 1.0
+    r8_debounce_seconds: float = 2.0
+    r7_min_confidence: float = 0.35
+    r8_min_confidence: float = 0.45
     resolution_hysteresis_seconds: float
     cooldown_seconds: float
     missing_observation_grace_seconds: float

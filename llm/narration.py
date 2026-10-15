@@ -80,6 +80,8 @@ def facts_from_incident(
     machine = None
     if incident.object_id is not None and incident.rule_id.value in ("R2", "R4"):
         machine = f"machine {display_track_label(incident.object_id)}"
+    elif incident.object_id is not None and incident.rule_id.value == "R7":
+        machine = f"suspended load {display_track_label(incident.object_id)}"
     return NarrationFacts(
         rule_id=incident.rule_id.value,
         title=incident.title or incident.reason_code,
@@ -103,10 +105,13 @@ def template_narration(facts: NarrationFacts) -> Narration:
     """The deterministic arm (and the fallback): always valid, never fluent."""
     where = f" in {facts.zone}" if facts.zone else ""
     near = f" near {facts.machine}" if facts.machine else ""
-    summary = (
-        f"{facts.title}: worker {facts.worker}{where}{near} from {facts.start_s}s "
-        f"for {facts.duration_s}s ({facts.status})."
-    )
+    if facts.rule_id == "R8":  # the subject is the fire or smoke, not a worker
+        summary = f"{facts.title} from {facts.start_s}s for {facts.duration_s}s ({facts.status})."
+    else:
+        summary = (
+            f"{facts.title}: worker {facts.worker}{where}{near} from {facts.start_s}s "
+            f"for {facts.duration_s}s ({facts.status})."
+        )
     caveat = (
         "This is a visual observation from video; verify on site."
         if facts.basis == "visual"

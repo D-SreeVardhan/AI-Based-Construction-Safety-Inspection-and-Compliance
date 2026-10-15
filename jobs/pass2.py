@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pipeline.cache.pass1_store import Pass1Store
 from pipeline.mapping.frame_context import FrameContextBuilder
 from pipeline.output.summaries import TrackSummaryBuilder
+from pipeline.output.twin_data import TwinRecorder
 from pipeline.rules.engine import EngineResult, RuleEngine
 from shared.enums import OperatingState
 from shared.schemas.bundle import TracksSummaryFile
@@ -26,6 +27,7 @@ class Pass2Result:
     end_time_s: float
     machine_states: dict[int, dict[str, OperatingState]] = field(default_factory=dict)
     insights: InsightsFile | None = None
+    twin: TwinRecorder | None = None
 
 
 def run_pass2(
@@ -33,6 +35,7 @@ def run_pass2(
     builder: FrameContextBuilder,
     engine: RuleEngine,
     summary: TrackSummaryBuilder,
+    twin: TwinRecorder | None = None,
 ) -> Pass2Result:
     outputs: dict[int, FrameRuleOutput] = {}
     machine_states: dict[int, dict[str, OperatingState]] = {}
@@ -40,6 +43,8 @@ def run_pass2(
     for frame, observations in store.frames_with_observations():
         context = builder.build(frame, observations)
         outputs[frame.frame_index] = engine.evaluate_frame(context)
+        if twin is not None:
+            twin.add(context, outputs[frame.frame_index])
         if context.machinery:
             machine_states[frame.frame_index] = {
                 m.machinery_id: m.operating_state for m in context.machinery
@@ -47,6 +52,8 @@ def run_pass2(
         summary.add_frame(context)
         end_time_s = frame.video_time_s
     rules = engine.finalize(end_time_s)
+    if twin is not None:
+        twin.smooth()
     insights = rules.insights
     if insights is not None:
         labels = {
@@ -63,6 +70,7 @@ def run_pass2(
             }
         )
     return Pass2Result(
+        twin=twin,
         insights=insights,
         rules=rules,
         tracks_summary=summary.build(rules.incidents),

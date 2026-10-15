@@ -2,7 +2,8 @@
 
 Everything is placed on the fitted ground plane in worker-height units (1 grid square =
 one worker height) and drawn through a virtual camera that sits behind and above the
-CCTV camera, swaying slowly so depth reads without disorienting the viewer. Nothing here
+CCTV camera. The view is fixed (zones and edges never move on screen) and worker
+positions come pre-smoothed from pass two (`TwinRecorder`), so nobody jitters. Nothing here
 claims hidden geometry: machines are prisms on their observed ground contact, zones and
 edges are the operator's lines lifted onto the plane.
 """
@@ -27,7 +28,7 @@ from shared.schemas.frame import FrameRuleOutput
 from shared.schemas.scene import GeometryType, ProposalType, SceneProposal
 from shared.schemas.tracks import Pass1TrackObservation
 
-SWAY_DEGREES = 11.0
+SWAY_DEGREES = 0.0  # a fixed view: a swaying camera made zones look unstable
 SWAY_PERIOD_S = 36.0
 ELEVATION_DEGREES = 46.0
 FIELD_OF_VIEW_DEGREES = 58.0
@@ -183,13 +184,15 @@ class TwinRenderer:
         output: FrameRuleOutput | None,
         machine_states: Mapping[str, OperatingState],
         machinery_classes: frozenset[str],
+        positions: Mapping[str, tuple[float, float]] | None = None,
     ) -> np.ndarray:
         view = self._view(time_s)
         image = self._background.copy()
         self._draw_ground(image, view)
         self._draw_camera(image, view)
         alerts = self._alerts(output)
-        workers, machines = self._objects(observations, machinery_classes)
+        workers, machines = self._objects(observations, machinery_classes, positions or {})
+        self._labels = style.LabelPlacer((self.width, self.height))
 
         # Flat things first: zones' floors, edges, bands, trails, shadows.
         for proposal, ground in self.zones:
@@ -246,18 +249,21 @@ class TwinRenderer:
             alerts[alert.track_id] = (state, [*rules, alert.rule_id.value])
         return alerts
 
-    def _objects(self, observations, machinery_classes):
+    def _objects(self, observations, machinery_classes, smoothed):
         workers, machines = [], []
         present = set()
         for o in observations:
             if o.object_class == PERSON_CLASS:
-                raw = self.mapper.ground(np.array([[o.anchor_reference.x, o.anchor_reference.y]]))[
-                    0
-                ]
-                if not np.all(np.isfinite(raw)):
-                    continue
-                previous = self._positions.get(o.canonical_track_id)
-                position = raw if previous is None else previous + SMOOTHING * (raw - previous)
+                if o.canonical_track_id in smoothed:
+                    position = np.asarray(smoothed[o.canonical_track_id], np.float64)
+                else:
+                    raw = self.mapper.ground(
+                        np.array([[o.anchor_reference.x, o.anchor_reference.y]])
+                    )[0]
+                    if not np.all(np.isfinite(raw)):
+                        continue
+                    previous = self._positions.get(o.canonical_track_id)
+                    position = raw if previous is None else previous + SMOOTHING * (raw - previous)
                 self._positions[o.canonical_track_id] = position
                 trail = self._trails.setdefault(
                     o.canonical_track_id, deque(maxlen=round(TRAIL_SECONDS * self.fps))
@@ -314,16 +320,8 @@ class TwinRenderer:
         if not np.all(np.isfinite(pixels)):
             return
         footprint = _poly(pixels[:4])
-        _fill(image, footprint, style.ACCENT, 0.06)
-        for corner in pixels[:4]:
-            cv2.line(
-                image,
-                tuple(np.round(pixels[4]).astype(int)),
-                tuple(np.round(corner).astype(int)),
-                _shade(style.ACCENT, 0.55),
-                1,
-                cv2.LINE_AA,
-            )
+        if footprint is not None:  # what the camera sees, as a quiet outline only
+            cv2.polylines(image, [footprint], True, _shade(style.ACCENT, 0.45), 1, cv2.LINE_AA)
         cv2.circle(image, tuple(np.round(pixels[4]).astype(int)), 5, style.ACCENT, -1, cv2.LINE_AA)
         style.chip(
             image,
@@ -512,32 +510,27 @@ class TwinRenderer:
             )
         elif helmet is HelmetState.NO_HELMET:
             cv2.circle(image, centre, head_radius + 2, style.DANGER, 1, cv2.LINE_AA)
+        if alert is None:
+            return  # quiet by default: only workers in a hazard condition are labelled
         label = display_track_label(track_id)
-        if alert is not None:
-            state, rules = alert
-            phase = "ALERT" if state is AlertState.ALERT else "pending"
-            text = f"{label} · {' '.join(sorted(set(rules)))} {phase}"
-            fill = style.DANGER if state is AlertState.ALERT else style.WARN
+        state, rules = alert
+        phase = "ALERT" if state is AlertState.ALERT else "pending"
+        text = f"{label} · {' '.join(sorted(set(rules)))} {phase}"
+        fill = style.DANGER if state is AlertState.ALERT else style.WARN
+        padding = (6, 2)
+        width, height = style.chip_size(text, size=11, padding=padding)
+        spot = self._labels.place(
+            centre[0] - width // 2, centre[1] - head_radius - 4, width, height, force=True
+        )
+        if spot is not None:
             style.chip(
                 image,
                 text,
-                (centre[0], centre[1] - head_radius - 4),
+                spot,
                 size=11,
                 fill=fill,
                 color=style.readable_on(fill),
-                anchor="mb",
-            )
-        else:
-            style.chip(
-                image,
-                label,
-                (centre[0], centre[1] - head_radius - 4),
-                size=10,
-                fill=style.SURFACE_RAISED,
-                color=style.TEXT_MUTED,
-                anchor="mb",
-                padding=(5, 2),
-                alpha=0.8,
+                padding=padding,
             )
 
     def _draw_hud(self, image: np.ndarray) -> None:

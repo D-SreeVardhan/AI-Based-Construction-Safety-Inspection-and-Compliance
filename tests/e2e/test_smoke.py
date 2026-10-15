@@ -35,13 +35,7 @@ def test_fake_pipeline_skip_video(tiny_input: Path, tmp_path: Path) -> None:
     assert [
         e["rule_id"]
         for e in json.loads((run_dir / "run_manifest.json").read_text())["rule_coverage"]
-    ] == [
-        "R1",
-        "R2",
-        "R3",
-        "R4",
-        "R5",
-    ]
+    ] == ["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8"]
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")

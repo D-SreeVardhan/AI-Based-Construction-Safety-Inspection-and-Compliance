@@ -84,3 +84,24 @@ rules:
     evidence: Synthetic elevated-edge fixture; not a licensed site positive
     licensed_real_positive: false
     use_for_precision_recall: false
+  R6:
+    clip_id: sard-9
+    expected_interval_s: [0.0, 173.0]
+    expected_status: evaluated_clear
+    evidence: No worker lies down on SARD 9; a licensed fall or collapse clip is still needed
+    licensed_real_positive: false
+    use_for_precision_recall: false
+  R7:
+    clip_id: sard-9
+    expected_interval_s: [0.0, 173.0]
+    expected_status: not_applicable
+    evidence: Tower crane in view, load rarely visible; needs a clip with a lift over workers
+    licensed_real_positive: false
+    use_for_precision_recall: false
+  R8:
+    clip_id: sard-9
+    expected_interval_s: [0.0, 173.0]
+    expected_status: evaluated_clear
+    evidence: No fire or smoke on SARD 9; a licensed site fire or smoke clip is still needed
+    licensed_real_positive: false
+    use_for_precision_recall: false

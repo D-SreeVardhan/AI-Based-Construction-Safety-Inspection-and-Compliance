@@ -1,4 +1,4 @@
-"""Shared evaluator contract and helpers for R1–R5.
+"""Shared evaluator contract and helpers for R1–R8.
 
 An evaluator turns one `FrameContext` into raw per-frame `RuleResult`s:
 
