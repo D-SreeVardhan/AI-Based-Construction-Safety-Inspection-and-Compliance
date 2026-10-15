@@ -1,0 +1,698 @@
+{
+  "arms": {
+    "template": {
+      "test": {
+        "n": 300,
+        "guardrail_pass": 1.0,
+        "schema_valid": 1.0,
+        "unsupported_claims": 0.0,
+        "failures_by_check": {},
+        "rouge_l": 0.3503,
+        "speed": null
+      },
+      "holdout": {
+        "n": 120,
+        "guardrail_pass": 1.0,
+        "schema_valid": 1.0,
+        "unsupported_claims": 0.0,
+        "failures_by_check": {},
+        "rouge_l": 0.3012,
+        "speed": null
+      }
+    },
+    "base_0shot": {
+      "test": {
+        "n": 300,
+        "guardrail_pass": 0.74,
+        "schema_valid": 0.99,
+        "unsupported_claims": 0.0133,
+        "failures_by_check": {
+          "action": 35,
+          "verdicts": 26,
+          "units": 19,
+          "numbers": 4,
+          "shape": 3
+        },
+        "rouge_l": 0.2203,
+        "speed": {
+          "seconds": 648.7,
+          "tokens_per_second": 34.7
+        }
+      },
+      "holdout": {
+        "n": 120,
+        "guardrail_pass": 0.775,
+        "schema_valid": 1.0,
+        "unsupported_claims": 0.0083,
+        "failures_by_check": {
+          "verdicts": 10,
+          "action": 9,
+          "units": 7,
+          "numbers": 1
+        },
+        "rouge_l": 0.2159,
+        "speed": {
+          "seconds": 262.2,
+          "tokens_per_second": 34.1
+        }
+      }
+    },
+    "base_4shot": {
+      "test": {
+        "n": 60,
+        "guardrail_pass": 0.9333,
+        "schema_valid": 1.0,
+        "unsupported_claims": 0.05,
+        "failures_by_check": {
+          "numbers": 3,
+          "action": 1
+        },
+        "rouge_l": 0.3973,
+        "speed": {
+          "seconds": 352.5,
+          "tokens_per_second": 11.9
+        }
+      },
+      "holdout": {
+        "n": 60,
+        "guardrail_pass": 0.85,
+        "schema_valid": 1.0,
+        "unsupported_claims": 0.0167,
+        "failures_by_check": {
+          "action": 8,
+          "numbers": 1
+        },
+        "rouge_l": 0.3727,
+        "speed": {
+          "seconds": 353.8,
+          "tokens_per_second": 11.7
+        }
+      }
+    },
+    "lora": {
+      "test": {
+        "n": 300,
+        "guardrail_pass": 0.9033,
+        "schema_valid": 0.9933,
+        "unsupported_claims": 0.0433,
+        "failures_by_check": {
+          "action": 15,
+          "numbers": 13,
+          "shape": 2
+        },
+        "rouge_l": 0.481,
+        "speed": {
+          "seconds": 653.0,
+          "tokens_per_second": 33.8
+        }
+      },
+      "holdout": {
+        "n": 120,
+        "guardrail_pass": 0.85,
+        "schema_valid": 0.9917,
+        "unsupported_claims": 0.0583,
+        "failures_by_check": {
+          "action": 11,
+          "numbers": 7,
+          "shape": 1
+        },
+        "rouge_l": 0.3907,
+        "speed": {
+          "seconds": 258.3,
+          "tokens_per_second": 33.6
+        }
+      }
+    }
+  },
+  "samples": {
+    "template": {
+      "test": [
+        {
+          "facts": {
+            "rule_id": "R2",
+            "title": "Apparent missing hi-vis in movement area",
+            "severity": "medium",
+            "basis": "heuristic",
+            "worker": "204",
+            "start_s": 39.0,
+            "duration_s": 19.5,
+            "status": "ongoing at the end of the clip",
+            "zone": "Level 2 slab edge",
+            "helmet": "no_helmet",
+            "vest": "no_vest",
+            "action": "Verify conspicuity requirements before work continues in the movement area."
+          },
+          "output": "{\"summary\":\"Apparent missing hi-vis in movement area: worker 204 in Level 2 slab edge from 39.0s for 19.5s (ongoing at the end of the clip).\",\"caveat\":\"This is a heuristic observation from video; verify on site.\",\"action\":\"Verify conspicuity requirements before work continues in the movement area.\"}"
+        },
+        {
+          "facts": {
+            "rule_id": "R3",
+            "title": "Restricted-zone intrusion",
+            "severity": "high",
+            "basis": "heuristic",
+            "worker": "277",
+            "start_s": 491.5,
+            "duration_s": 9.5,
+            "status": "resolved",
+            "zone": "Excavation pit",
+            "helmet": "unknown",
+            "vest": "no_vest",
+            "action": "Stop entry and verify the exclusion boundary before resuming work."
+          },
+          "output": "{\"summary\":\"Restricted-zone intrusion: worker 277 in Excavation pit from 491.5s for 9.5s (resolved).\",\"caveat\":\"This is a heuristic observation from video; verify on site.\",\"action\":\"Stop entry and verify the exclusion boundary before resuming work.\"}"
+        },
+        {
+          "facts": {
+            "rule_id": "R4",
+            "title": "Approximate machinery proximity",
+            "severity": "high",
+            "basis": "heuristic",
+            "worker": "52",
+            "start_s": 165.8,
+            "duration_s": 5.5,
+            "status": "resolved",
+            "machine": "machine 46",
+            "band": "near",
+            "distance_wh": "0.6 to 1.3 WH",
+            "vest": "no_vest",
+            "action": "Pause movement and verify separation with the plant operator."
+          },
+          "output": "{\"summary\":\"Approximate machinery proximity: worker 52 near machine 46 from 165.8s for 5.5s (resolved).\",\"caveat\":\"This is a heuristic observation from video; verify on site.\",\"action\":\"Pause movement and verify separation with the plant operator.\"}"
+        },
+        {
+          "facts": {
+            "rule_id": "R4",
+            "title": "Approximate machinery proximity",
+            "severity": "high",
+            "basis": "heuristic",
+            "worker": "35",
+            "start_s": 277.5,
+            "duration_s": 15.9,
+            "status": "resolved",
+            "machine": "machine 43",
+            "band": "near",
+            "distance_wh": "0.9 to 1.3 WH",
+            "vest": "unknown",
+            "action": "Pause movement and verify separation with the plant operator."
+          },
+          "output": "{\"summary\":\"Approximate machinery proximity: worker 35 near machine 43 from 277.5s for 15.9s (resolved).\",\"caveat\":\"This is a heuristic observation from video; verify on site.\",\"action\":\"Pause movement and verify separation with the plant operator.\"}"
+        }
+      ],
+      "holdout": [
+        {
+          "facts": {
+            "rule_id": "R3",
+            "title": "Restricted-zone intrusion",
+            "severity": "high",
+            "basis": "heuristic",
+            "worker": "198",
+            "start_s": 698.2,
+            "duration_s": 43.4,
+            "status": "resolved",
+            "zone": "Canopy edge",
+            "helmet": "helmet",
+            "action": "Stop entry and verify the exclusion boundary before resuming work."
+          },
+          "output": "{\"summary\":\"Restricted-zone intrusion: worker 198 in Canopy edge from 698.2s for 43.4s (resolved).\",\"caveat\":\"This is a heuristic observation from video; verify on site.\",\"action\":\"Stop entry and verify the exclusion boundary before resuming work.\"}"
+        },
+        {
+          "facts": {
+            "rule_id": "R1",
+            "title": "Apparent missing helmet",
+            "severity": "high",
+            "basis": "visual",
+            "worker": "235",
+            "start_s": 505.5,
+            "duration_s": 20.5,
+            "status": "resolved",
+            "helmet": "no_helmet",
+            "vest": "unknown",
+            "action": "Pause the task and verify that suitable head protection is being worn."
+          },
+          "output": "{\"summary\":\"Apparent missing helmet: worker 235 from 505.5s for 20.5s (resolved).\",\"caveat\":\"This is a visual observation from video; verify on site.\",\"action\":\"Pause the task and verify that suitable head protection is being worn.\"}"
+        },
+        {
+          "facts": {
+            "rule_id": "R3",
+            "title": "Restricted-zone intrusion",
+            "severity": "high",
+            "basis": "heuristic",
+            "worker": "62",
+            "start_s": 412.3,
+            "duration_s": 5.3,
+            "status": "ongoing at the end of the clip",
+            "zone": "Car park level 1",
+            "helmet": "no_helmet",
+            "vest": "unknown",
+            "action": "Stop entry and verify the exclusion boundary before resuming work."
+          },
+          "output": "{\"summary\":\"Restricted-zone intrusion: worker 62 in Car park level 1 from 412.3s for 5.3s (ongoing at the end of the clip).\",\"caveat\":\"This is a heuristic observation from video; verify on site.\",\"action\":\"Stop entry and verify the exclusion boundary before resuming work.\"}"
+        },
+        {
+          "facts": {
+            "rule_id": "R1",
+            "title": "Apparent missing helmet",
+            "severity": "high",
+            "basis": "visual",
+            "worker": "212",
+            "start_s": 850.0,
+            "duration_s": 2.7,
+            "status": "ongoing at the end of the clip",
+            "helmet": "no_helmet",
+            "action": "Pause the task and verify that suitable head protection is being worn."
+          },
+          "output": "{\"summary\":\"Apparent missing helmet: worker 212 from 850.0s for 2.7s (ongoing at the end of the clip).\",\"caveat\":\"This is a visual observation from video; verify on site.\",\"action\":\"Pause the task and verify that suitable head protection is being worn.\"}"
+        }
+      ]
+    },
+    "base_0shot": {
+      "test": [
+        {
+          "facts": {
+            "rule_id": "R2",
+            "title": "Apparent missing hi-vis in movement area",
+            "severity": "medium",
+            "basis": "heuristic",
+            "worker": "204",
+            "start_s": 39.0,
+            "duration_s": 19.5,
+            "status": "ongoing at the end of the clip",
+            "zone": "Level 2 slab edge",
+            "helmet": "no_helmet",
+            "vest": "no_vest",
+            "action": "Verify conspicuity requirements before work continues in the movement area."
+          },
+          "output": "```json\n{\n  \"summary\": \"Worker #204 observed apparent lack of high-visibility clothing during movement activities.\",\n  \"caveat\": \"Video evidence may not capture all instances of attire compliance.\",\n  \"action\": \"Immediate enforcement of wearing required high-visibility clothing to ensure visibility.\"\n}\n```"
+        },
+        {
+          "facts": {
+            "rule_id": "R3",
+            "title": "Restricted-zone intrusion",
+            "severity": "high",
+            "basis": "heuristic",
+            "worker": "277",
+            "start_s": 491.5,
+            "duration_s": 9.5,
+            "status": "resolved",
+            "zone": "Excavation pit",
+            "helmet": "unknown",
+            "vest": "no_vest",
+            "action": "Stop entry and verify the exclusion boundary before resuming work."
+          },
+          "output": "```json\n{\n  \"summary\": \"Worker 277 entered restricted zone without proper helmet and vest.\",\n  \"caveat\": \"Video evidence shows no visible contraband but does not confirm compliance with all safety protocols.\",\n  \"action\": \"Immediate halt to excavation until all workers wear appropriate personal protective equipment (PPE) and reverify exclusion boundaries.\"\n}\n```"
+        },
+        {
+          "facts": {
+            "rule_id": "R4",
+            "title": "Approximate machinery proximity",
+            "severity": "high",
+            "basis": "heuristic",
+            "worker": "52",
+            "start_s": 165.8,
+            "duration_s": 5.5,
+            "status": "resolved",
+            "machine": "machine 46",
+            "band": "near",
+            "distance_wh": "0.6 to 1.3 WH",
+            "vest": "no_vest",
+            "action": "Pause movement and verify separation with the plant operator."
+          },
+          "output": "```json\n{\n  \"summary\": \"Worker 52 needs to pause their movement and check with the machine operator to ensure proper distance between them and machine 46.\",\n  \"caveat\": \"The video evidence may not capture all details about the exact distance or any potential hazards.\",\n  \"action\": \"Worker 52 should immediately stop moving and communicate with the machine operator to confirm that there is sufficient space between themselves and machine 46.\"\n}\n```"
+        },
+        {
+          "facts": {
+            "rule_id": "R4",
+            "title": "Approximate machinery proximity",
+            "severity": "high",
+            "basis": "heuristic",
+            "worker": "35",
+            "start_s": 277.5,
+            "duration_s": 15.9,
+            "status": "resolved",
+            "machine": "machine 43",
+            "band": "near",
+            "distance_wh": "0.9 to 1.3 WH",
+            "vest": "unknown",
+            "action": "Pause movement and verify separation with the plant operator."
+          },
+          "output": "```json\n{\n  \"summary\": \"Worker 35 needs to pause their movement and check with the plant operator due to an approximate machinery proximity issue.\",\n  \"caveat\": \"The video evidence may not capture all details of the machinery's exact location or the operator's response.\",\n  \"action\": \"Worker should immediately stop moving and communicate with the plant operator about the observed proximity risk.\"\n}\n```"
+        }
+      ],
+      "holdout": [
+        {
+          "facts": {
+            "rule_id": "R3",
+            "title": "Restricted-zone intrusion",
+            "severity": "high",
+            "basis": "heuristic",
+            "worker": "198",
+            "start_s": 698.2,
+            "duration_s": 43.4,
+            "status": "resolved",
+            "zone": "Canopy edge",
+            "helmet": "helmet",
+            "action": "Stop entry and verify the exclusion boundary before resuming work."
+          },
+          "output": "```json\n{\n  \"summary\": \"Worker 198 restricted zone intrusion at Canopy edge.\",\n  \"caveat\": \"Video evidence shows an unauthorized entry but does not confirm the exact location within the restricted area.\",\n  \"action\": \"Immediate halt to work until verified that no unauthorized persons remain within the restricted zone.\"\n}\n```"
+        },
+        {
+          "facts": {
+            "rule_id": "R1",
+            "title": "Apparent missing helmet",
+            "severity": "high",
+            "basis": "visual",
+            "worker": "235",
+            "start_s": 505.5,
+            "duration_s": 20.5,
+            "status": "resolved",
+            "helmet": "no_helmet",
+            "vest": "unknown",
+            "action": "Pause the task and verify that suitable head protection is being worn."
+          },
+          "output": "```json\n{\n  \"summary\": \"Worker 235 was observed to be missing their helmet at 505.5 seconds, lasting 20.5 seconds.\",\n  \"caveat\": \"The video evidence does not capture whether the worker had any vest present.\",\n  \"action\": \"Ensure all workers are wearing appropriate head protection before resuming work.\"\n}\n```"
+        },
+        {
+          "facts": {
+            "rule_id": "R3",
+            "title": "Restricted-zone intrusion",
+            "severity": "high",
+            "basis": "heuristic",
+            "worker": "62",
+            "start_s": 412.3,
+            "duration_s": 5.3,
+            "status": "ongoing at the end of the clip",
+            "zone": "Car park level 1",
+            "helmet": "no_helmet",
+            "vest": "unknown",
+            "action": "Stop entry and verify the exclusion boundary before resuming work."
+          },
+          "output": "```json\n{\n  \"summary\": \"Worker 62 was not wearing a helmet while entering restricted zone level 1.\",\n  \"caveat\": \"The video does not capture whether the exclusion boundary was properly verified.\",\n  \"action\": \"Immediate halt to all activities until the exclusion boundary is rechecked and confirmed safe by authorized personnel.\"\n}\n```"
+        },
+        {
+          "facts": {
+            "rule_id": "R1",
+            "title": "Apparent missing helmet",
+            "severity": "high",
+            "basis": "visual",
+            "worker": "212",
+            "start_s": 850.0,
+            "duration_s": 2.7,
+            "status": "ongoing at the end of the clip",
+            "helmet": "no_helmet",
+            "action": "Pause the task and verify that suitable head protection is being worn."
+          },
+          "output": "```json\n{\n  \"summary\": \"Worker 212 appears to be missing their helmet during a high-severity visual rule violation.\",\n  \"caveat\": \"The video evidence may not capture all instances where the worker was wearing a helmet.\",\n  \"action\": \"Immediately stop work and ensure that Worker 212 wears a proper helmet before resuming tasks.\"\n}\n```"
+        }
+      ]
+    },
+    "base_4shot": {
+      "test": [
+        {
+          "facts": {
+            "rule_id": "R2",
+            "title": "Apparent missing hi-vis in movement area",
+            "severity": "medium",
+            "basis": "heuristic",
+            "worker": "204",
+            "start_s": 39.0,
+            "duration_s": 19.5,
+            "status": "ongoing at the end of the clip",
+            "zone": "Level 2 slab edge",
+            "helmet": "no_helmet",
+            "vest": "no_vest",
+            "action": "Verify conspicuity requirements before work continues in the movement area."
+          },
+          "output": "{\"summary\":\"Worker 204 did not wear any protective vest or helmet during their entire shift at Level 2 slab edge.\",\"caveat\":\"Visibility and visibility aids like vests and helmets are subjective and depend on lighting conditions.\",\"action\":\"Ensure all workers in the movement area comply with conspicuousness requirements before resuming work.\"}"
+        },
+        {
+          "facts": {
+            "rule_id": "R3",
+            "title": "Restricted-zone intrusion",
+            "severity": "high",
+            "basis": "heuristic",
+            "worker": "277",
+            "start_s": 491.5,
+            "duration_s": 9.5,
+            "status": "resolved",
+            "zone": "Excavation pit",
+            "helmet": "unknown",
+            "vest": "no_vest",
+            "action": "Stop entry and verify the exclusion boundary before resuming work."
+          },
+          "output": "{\"summary\":\"Worker 277 entered an excavation pit restricted zone for 9.5 seconds starting at 491.5 s.\",\"caveat\":\"Visibility issues prevented clear judgment of helmet and vest status.\",\"action\":\"Stop entry into the restricted zone and recheck the exclusion boundary before resuming work.\"}"
+        },
+        {
+          "facts": {
+            "rule_id": "R4",
+            "title": "Approximate machinery proximity",
+            "severity": "high",
+            "basis": "heuristic",
+            "worker": "52",
+            "start_s": 165.8,
+            "duration_s": 5.5,
+            "status": "resolved",
+            "machine": "machine 46",
+            "band": "near",
+            "distance_wh": "0.6 to 1.3 WH",
+            "vest": "no_vest",
+            "action": "Pause movement and verify separation with the plant operator."
+          },
+          "output": "{\"summary\":\"Worker 52 was within 0.6 to 1.3 WH of machine 46 while moving near it for 5.5 seconds.\",\"caveat\":\"Distance judgment is based on visual cues which might be inaccurate.\",\"action\":\"Stop movement and ensure there's enough space between the worker and the machinery.\"}"
+        },
+        {
+          "facts": {
+            "rule_id": "R4",
+            "title": "Approximate machinery proximity",
+            "severity": "high",
+            "basis": "heuristic",
+            "worker": "35",
+            "start_s": 277.5,
+            "duration_s": 15.9,
+            "status": "resolved",
+            "machine": "machine 43",
+            "band": "near",
+            "distance_wh": "0.9 to 1.3 WH",
+            "vest": "unknown",
+            "action": "Pause movement and verify separation with the plant operator."
+          },
+          "output": "{\"summary\":\"Worker 35 was within 0.9 to 1.3 WH of machine 43 near band 35 from 277.5 s to 277.5 + 15.9 s.\",\"caveat\":\"Distance judgment is based on visual cues which might be inaccurate.\",\"action\":\"Stop movement and inform the plant operator about the proximity of the worker to the machinery.\"}"
+        }
+      ],
+      "holdout": [
+        {
+          "facts": {
+            "rule_id": "R3",
+            "title": "Restricted-zone intrusion",
+            "severity": "high",
+            "basis": "heuristic",
+            "worker": "198",
+            "start_s": 698.2,
+            "duration_s": 43.4,
+            "status": "resolved",
+            "zone": "Canopy edge",
+            "helmet": "helmet",
+            "action": "Stop entry and verify the exclusion boundary before resuming work."
+          },
+          "output": "{\"summary\":\"Worker 198 entered the restricted zone at Canopy edge for 43.4 seconds starting at 698.2 s.\",\"caveat\":\"The camera did not capture the exact location of the exclusion boundary.\",\"action\":\"Stop entry into the restricted zone and recheck the exclusion boundary before allowing workers to enter again.\"}"
+        },
+        {
+          "facts": {
+            "rule_id": "R1",
+            "title": "Apparent missing helmet",
+            "severity": "high",
+            "basis": "visual",
+            "worker": "235",
+            "start_s": 505.5,
+            "duration_s": 20.5,
+            "status": "resolved",
+            "helmet": "no_helmet",
+            "vest": "unknown",
+            "action": "Pause the task and verify that suitable head protection is being worn."
+          },
+          "output": "{\"summary\":\"Worker 235 was not wearing a helmet for 20.5 seconds starting at 505.5 s.\",\"caveat\":\"The camera did not capture the vest; ensure it is properly fastened.\",\"action\":\"Stop the work and check if worker 235 is wearing a vest and ensuring it is securely fastened.\"}"
+        },
+        {
+          "facts": {
+            "rule_id": "R3",
+            "title": "Restricted-zone intrusion",
+            "severity": "high",
+            "basis": "heuristic",
+            "worker": "62",
+            "start_s": 412.3,
+            "duration_s": 5.3,
+            "status": "ongoing at the end of the clip",
+            "zone": "Car park level 1",
+            "helmet": "no_helmet",
+            "vest": "unknown",
+            "action": "Stop entry and verify the exclusion boundary before resuming work."
+          },
+          "output": "{\"summary\":\"Worker 62 entered the restricted zone at Car park level 1 for 5.3 seconds.\",\"caveat\":\"The camera did not capture the exact location of the exclusion boundary; verify it in person.\",\"action\":\"Stop entry and ensure the exclusion boundary is correctly marked before resuming work.\"}"
+        },
+        {
+          "facts": {
+            "rule_id": "R1",
+            "title": "Apparent missing helmet",
+            "severity": "high",
+            "basis": "visual",
+            "worker": "212",
+            "start_s": 850.0,
+            "duration_s": 2.7,
+            "status": "ongoing at the end of the clip",
+            "helmet": "no_helmet",
+            "action": "Pause the task and verify that suitable head protection is being worn."
+          },
+          "output": "{\"summary\":\"Worker 212 was not wearing a helmet for 2.7 seconds starting at 850 s.\",\"caveat\":\"The camera did not clearly see the helmet; ensure it is properly worn.\",\"action\":\"Stop the task and check if worker 212 is wearing a helmet.\"}"
+        }
+      ]
+    },
+    "lora": {
+      "test": [
+        {
+          "facts": {
+            "rule_id": "R2",
+            "title": "Apparent missing hi-vis in movement area",
+            "severity": "medium",
+            "basis": "heuristic",
+            "worker": "204",
+            "start_s": 39.0,
+            "duration_s": 19.5,
+            "status": "ongoing at the end of the clip",
+            "zone": "Level 2 slab edge",
+            "helmet": "no_helmet",
+            "vest": "no_vest",
+            "action": "Verify conspicuity requirements before work continues in the movement area."
+          },
+          "output": "{\"summary\":\"Worker 204 was seen without visible jacket or shirt in Level 2 slab edge from 39 s to 58.5 s.\",\"caveat\":\"The camera judged the vest colour from a small image and may miss some colours.\",\"action\":\"Have worker 204 put on a high-visibility jacket and check it again.\"}"
+        },
+        {
+          "facts": {
+            "rule_id": "R3",
+            "title": "Restricted-zone intrusion",
+            "severity": "high",
+            "basis": "heuristic",
+            "worker": "277",
+            "start_s": 491.5,
+            "duration_s": 9.5,
+            "status": "resolved",
+            "zone": "Excavation pit",
+            "helmet": "unknown",
+            "vest": "no_vest",
+            "action": "Stop entry and verify the exclusion boundary before resuming work."
+          },
+          "output": "{\"summary\":\"Worker 277 entered Excavation pit without a vest and within 9.5 seconds after it started.\",\"caveat\":\"The zone was judged to be open by the barrier camera, but confirm the boundary and check the state of the worker's vest.\",\"action\":\"Have worker 277 leave the area and stop all work until it is safe.\"}"
+        },
+        {
+          "facts": {
+            "rule_id": "R4",
+            "title": "Approximate machinery proximity",
+            "severity": "high",
+            "basis": "heuristic",
+            "worker": "52",
+            "start_s": 165.8,
+            "duration_s": 5.5,
+            "status": "resolved",
+            "machine": "machine 46",
+            "band": "near",
+            "distance_wh": "0.6 to 1.3 WH",
+            "vest": "no_vest",
+            "action": "Pause movement and verify separation with the plant operator."
+          },
+          "output": "{\"summary\":\"From 165.8 s, worker 52 was within the near band of machine 46 (0.6 to 1.3 WH) for 5.5 seconds.\",\"caveat\":\"The distance is estimated from worker height and is not measured in metres.\",\"action\":\"Pause movement and agree a safe separation with the plant operator.\"}"
+        },
+        {
+          "facts": {
+            "rule_id": "R4",
+            "title": "Approximate machinery proximity",
+            "severity": "high",
+            "basis": "heuristic",
+            "worker": "35",
+            "start_s": 277.5,
+            "duration_s": 15.9,
+            "status": "resolved",
+            "machine": "machine 43",
+            "band": "near",
+            "distance_wh": "0.9 to 1.3 WH",
+            "vest": "unknown",
+            "action": "Pause movement and verify separation with the plant operator."
+          },
+          "output": "{\"summary\":\"From 277.5 s, workess 35 was within the near band of machine 43 (0.9 to 1.3 WH) for 15.9 seconds, then it cleared.\",\"caveat\":\"Separation is judged by video alone; confirm with plant operator.\",\"action\":\"Pause movement and check that separation is clear.\"}"
+        }
+      ],
+      "holdout": [
+        {
+          "facts": {
+            "rule_id": "R3",
+            "title": "Restricted-zone intrusion",
+            "severity": "high",
+            "basis": "heuristic",
+            "worker": "198",
+            "start_s": 698.2,
+            "duration_s": 43.4,
+            "status": "resolved",
+            "zone": "Canopy edge",
+            "helmet": "helmet",
+            "action": "Stop entry and verify the exclusion boundary before resuming work."
+          },
+          "output": "{\"summary\":\"From 698.2 s, worker 198 was inside Canopy edge restricted zone for 43.4 seconds.\",\"caveat\":\"The zone boundary is estimated and may not be accurate.\\n\",\"action\":\"Have worker 198 leave the area and check the barrier before continuing.\"}"
+        },
+        {
+          "facts": {
+            "rule_id": "R1",
+            "title": "Apparent missing helmet",
+            "severity": "high",
+            "basis": "visual",
+            "worker": "235",
+            "start_s": 505.5,
+            "duration_s": 20.5,
+            "status": "resolved",
+            "helmet": "no_helmet",
+            "vest": "unknown",
+            "action": "Pause the task and verify that suitable head protection is being worn."
+          },
+          "output": "{\"summary\":\"Worker 235 appeared to be missing his helmet from start s: 505.5 for 20.5 seconds.\",\"caveat\":\"Helmet state is judged from video alone; confirm it in person.\",\"action\":\"Stop work briefly and check worker's helmet.\"}"
+        },
+        {
+          "facts": {
+            "rule_id": "R3",
+            "title": "Restricted-zone intrusion",
+            "severity": "high",
+            "basis": "heuristic",
+            "worker": "62",
+            "start_s": 412.3,
+            "duration_s": 5.3,
+            "status": "ongoing at the end of the clip",
+            "zone": "Car park level 1",
+            "helmet": "no_helmet",
+            "vest": "unknown",
+            "action": "Stop entry and verify the exclusion boundary before resuming work."
+          },
+          "output": "{\"summary\":\"Worker 62 entered Car park level 1 without a visible vest and still ongoing.\",\"caveat\":\"The zone was open to all workers until judged by the barrier team.\",\"action\":\"Have worker 62 leave the area and check the barrier\"}"
+        },
+        {
+          "facts": {
+            "rule_id": "R1",
+            "title": "Apparent missing helmet",
+            "severity": "high",
+            "basis": "visual",
+            "worker": "212",
+            "start_s": 850.0,
+            "duration_s": 2.7,
+            "status": "ongoing at the end of the clip",
+            "helmet": "no_helmet",
+            "action": "Pause the task and verify that suitable head protection is being worn."
+          },
+          "output": "{\"summary\":\"Worker 212 appeared to have no helmet for 2.7 seconds from 850 s.\",\"caveat\":\"Helmet state is judged from video alone; capes and hooded jackets obscure some caps.\",\"action\":\"Stop the work briefly and check that worker 212 has a proper helmet on.\"}"
+        }
+      ]
+    }
+  },
+  "promotion_gate": {
+    "schema_valid": 1.0,
+    "unsupported_claims": 0.02
+  },
+  "notes": {
+    "base_0shot": "same system prompt and facts as the LoRA arm, adapter disabled",
+    "base_4shot": "first 60 examples per split only (compute budget)"
+  },
+  "promoted": false
+}
