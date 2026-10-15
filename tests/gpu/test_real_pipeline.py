@@ -92,5 +92,30 @@ def test_pass_one_and_two_on_real_footage(tmp_path: Path) -> None:
         RuleEngine(run_id="gpu-test", config=config.rules),
         TrackSummaryBuilder("gpu-test"),
     )
+    from shared.enums import RuleId
+
     assert pass2.insights is not None
-    assert [e.rule_id.value for e in pass2.rules.coverage] == ["R1", "R2", "R3", "R4", "R5"]
+    assert [e.rule_id for e in pass2.rules.coverage] == list(RuleId)
+
+
+def test_analyse_scores_rules_without_rendering(tmp_path: Path) -> None:
+    """ProcessJob.analyse(): the benchmark path (no render, no bundle), with cached models."""
+    import subprocess
+
+    from jobs import process_job
+    from jobs.process_job import ProcessJob
+
+    clip = tmp_path / "sard9_6s.mp4"
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-ss", "20", "-t", "6", "-i", str(CLIP), "-c", "copy", str(clip)],
+        check=True,
+    )
+    first = ProcessJob(clip, output_root=tmp_path / "out", run_id="gpu-analyse-1").analyse()
+    loaded = dict(process_job._MODELS)
+    second = ProcessJob(clip, output_root=tmp_path / "out", run_id="gpu-analyse-2").analyse()
+    assert not (tmp_path / "out").exists()  # nothing published
+    assert all(process_job._MODELS[k] is v for k, v in loaded.items())  # models reused
+    assert first.pass1.frames > 0 and first.pass2.rules.coverage
+    assert len(first.pass2.rules.incidents) == len(second.pass2.rules.incidents)  # deterministic
+    first.store.close()
+    second.store.close()

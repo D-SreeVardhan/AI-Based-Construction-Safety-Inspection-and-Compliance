@@ -21,6 +21,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
@@ -148,6 +149,37 @@ class _StageClock:
         )
 
 
+@dataclass
+class Analysis:
+    """What `ProcessJob.analyse()` found, before rendering and publishing."""
+
+    created_at: str
+    timer: _Timer
+    metadata: VideoMetadata
+    video_sha: str
+    decision: DriftDecision
+    drift: DriftProbe
+    source: FrameSource
+    store: Pass1Store
+    pass1: Pass1Summary
+    stage1_id: str
+    gate: GeometryGate
+    scene: SceneCache
+    tracks: Pass1Store | StitchedStore
+    pass2: Pass2Result
+
+
+# Models loaded once per process and shared by every job in it: a benchmark of hundreds of
+# clips would otherwise reload the detector each time. They hold no per-video state.
+_MODELS: dict[tuple[str, ...], object] = {}
+
+
+def _model(key: tuple[str, ...], load: Callable[[], object]) -> Any:
+    if key not in _MODELS:
+        _MODELS[key] = load()
+    return _MODELS[key]
+
+
 class ProcessJob:
     def __init__(
         self,
@@ -187,6 +219,48 @@ class ProcessJob:
         if self.run_dir.exists():
             raise PipelineError("RUN_EXISTS", f"{self.run_dir} already exists")
         self.run_dir.mkdir(parents=True)
+        found = self.analyse()
+        timer, pass1 = found.timer, found.pass1
+
+        with timer.stage(JobStage.RENDER):
+            rendered = render_run(
+                source=found.source,
+                store=found.tracks,
+                pass2=found.pass2,
+                scene=found.scene,
+                config=self.config,
+                run_dir=self.run_dir,
+                title=f"Construction Safety Twin  |  {self.video.name}",
+                mappers={
+                    shot: GroundMapper(fit) for shot, fit in self.plane_fits.items() if fit.accepted
+                },
+                progress=self._progress("render", pass1.frames),
+            )
+        found.store.close()
+
+        with timer.stage(JobStage.PUBLISH):
+            manifest = self._publish(
+                found.created_at,
+                found.metadata,
+                found.video_sha,
+                found.stage1_id,
+                found.decision.mode,
+                found.drift,
+                found.gate,
+                pass1,
+                found.pass2,
+                found.scene,
+                rendered,
+                timer,
+            )
+        return manifest
+
+    def analyse(self) -> Analysis:
+        """Intake, detection, geometry and rules: everything but rendering and the bundle.
+
+        Writes only the pass-1 store in the work directory, so benchmarks can score rules on
+        many clips quickly (evaluation/synthsite_eval.py); `run()` renders and publishes.
+        """
         self.work_dir.mkdir(parents=True, exist_ok=True)
         created_at = _now()
         timer = _Timer([])
@@ -235,39 +309,22 @@ class ProcessJob:
                 f"pass 2: {len(pass2.rules.incidents)} incident(s); geometry "
                 f"{'supported' if gate.supported else 'unsupported'} ({gate.reason_code})"
             )
-
-        with timer.stage(JobStage.RENDER):
-            rendered = render_run(
-                source=source,
-                store=tracks,
-                pass2=pass2,
-                scene=scene,
-                config=self.config,
-                run_dir=self.run_dir,
-                title=f"Construction Safety Twin  |  {self.video.name}",
-                mappers={
-                    shot: GroundMapper(fit) for shot, fit in self.plane_fits.items() if fit.accepted
-                },
-                progress=self._progress("render", pass1.frames),
-            )
-        store.close()
-
-        with timer.stage(JobStage.PUBLISH):
-            manifest = self._publish(
-                created_at,
-                metadata,
-                video_sha,
-                stage1_id,
-                decision.mode,
-                drift,
-                gate,
-                pass1,
-                pass2,
-                scene,
-                rendered,
-                timer,
-            )
-        return manifest
+        return Analysis(
+            created_at=created_at,
+            timer=timer,
+            metadata=metadata,
+            video_sha=video_sha,
+            decision=decision,
+            drift=drift,
+            source=source,
+            store=store,
+            pass1=pass1,
+            stage1_id=stage1_id,
+            gate=gate,
+            scene=scene,
+            tracks=tracks,
+            pass2=pass2,
+        )
 
     # ------------------------------------------------------------------ stages
 
@@ -280,7 +337,10 @@ class ProcessJob:
                 f"stage-1 detector is the pretrained fallback ({weights.name}), "
                 "not a construction fine-tune"
             )
-        detector = Stage1Detector(self.config.stage1, weights)
+        detector = _model(
+            ("stage1", str(weights), self.config.stage1.model_dump_json()),
+            lambda: Stage1Detector(self.config.stage1, weights),
+        )
         tracker = ByteTrackAdapter(
             self.config.tracker,
             # The tracker only sees detection frames: its memory is counted in those.
@@ -289,7 +349,11 @@ class ProcessJob:
         )
         ppe = self._ppe_classifier(detector.device)
         pose_weights = resolve_pose_weights(self.config.pose.model_path, self.root)
-        pose = PoseVerifier(pose_weights, detector.device) if pose_weights else None
+        pose = (
+            _model(("pose", str(pose_weights)), lambda: PoseVerifier(pose_weights, detector.device))
+            if pose_weights
+            else None
+        )
         if pose is None:
             self.warnings.append("pose model missing: R6 judges posture from box shape only")
         store = Pass1Store(self.work_dir / "pass1.sqlite")
@@ -534,7 +598,10 @@ class ProcessJob:
             self.warnings.append("PPE classifier not trained yet: R1/R2 unsupported")
             return None
         self.model_ids["ppe"] = f"{path.name}:{file_sha256(path)[:16]}"
-        return PPEClassifier(path, device, batch_size=self.config.ppe.batch_size)
+        return _model(
+            ("ppe", str(path), str(self.config.ppe.batch_size)),
+            lambda: PPEClassifier(path, device, batch_size=self.config.ppe.batch_size),
+        )
 
     def _pass2(
         self,
