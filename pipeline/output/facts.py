@@ -336,7 +336,11 @@ def register_answer(bundle: RunBundle, facts: list[Fact], question: str) -> tupl
                 + ", ".join(f"{f.rule.value} [{f.id}]" for f in clear if f.rule)
             )
             cited.extend(clear)
-    elif any(w in q for w in ("reliab", "accura", "trust", "sure", "limit", "confiden")):
+    elif re.search(r"\b(which|who|most)\b.*\b(worker|exposed|exposure|people|person)", q):
+        ranked = [f for f in facts if f.kind == "worker"][:3]  # facts keep exposure order
+        for fact in ranked or [by_id["RUN"]]:
+            say(fact)
+    elif re.search(r"\b(reliab\w*|accura\w*|trust\w*|sure|limit\w*|confiden\w*)\b", q):
         say(by_id["LIMITS"])
     elif any(w in q for w in ("do ", "fix", "priorit", "action", "recommend", "control", "first")):
         for row in risk.rows[:3]:

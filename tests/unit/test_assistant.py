@@ -194,13 +194,19 @@ def test_overloaded_models_fall_back_and_bad_keys_fail_fast(
         tried.append(model)
         if model == "busy":
             raise ProviderError("503 high demand", transient=True)
+        if model == "gone":  # the live demo: gemini-2.5-flash answered 404
+            raise ProviderError("404 model not found", next_model=True)
         if model == "badkey":
             raise ProviderError("401 invalid key")
         return Completion(text="ok [RUN]", model=model, latency_s=0.1)
 
     monkeypatch.setattr(providers.ChatProvider, "_call", fake_call)
-    busy = providers.ChatProvider("p", "u", "busy", fallback_models=("spare",))
-    assert busy.complete([]).model == "spare" and tried == ["busy", "spare"]
+    busy = providers.ChatProvider("p", "u", "busy", fallback_models=("gone", "spare"))
+    assert busy.complete([]).model == "spare" and tried == ["busy", "gone", "spare"]
+    tried.clear()
+    with pytest.raises(ProviderError, match="busy.*|503") as raised:
+        providers.ChatProvider("p", "u", "busy", fallback_models=("gone",)).complete([])
+    assert "503" in str(raised.value) and "404" in str(raised.value)  # every failure reported
     tried.clear()
     with pytest.raises(ProviderError):
         providers.ChatProvider("p", "u", "badkey", fallback_models=("spare",)).complete([])
@@ -208,4 +214,9 @@ def test_overloaded_models_fall_back_and_bad_keys_fail_fast(
     gemini = from_env({"SAFETY_LLM_PROVIDER": "gemini", "SAFETY_LLM_API_KEY": "k"})
     assert gemini is not None
     assert gemini.model == "gemini-3.6-flash"
-    assert gemini.fallback_models == ("gemini-2.5-flash", "gemini-3.8-flash")
+    assert gemini.fallback_models == ("gemini-3.8-flash", "gemini-3.5-flash-lite")
+
+
+def test_register_answers_who_was_most_exposed_not_reliability(bundle: RunBundle) -> None:
+    reply = RiskAssistant(bundle).register_answer("Which worker had the most exposure?")
+    assert "[LIMITS]" not in reply.text  # "exposure" contains "sure"

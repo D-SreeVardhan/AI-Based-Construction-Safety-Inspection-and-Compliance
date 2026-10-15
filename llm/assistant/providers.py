@@ -38,14 +38,18 @@ PRESETS: dict[str, tuple[str, str]] = {
 # models cannot turn thinking off, so the least that grounded Q&A needs ("low").
 DEFAULT_REASONING = {"ollama": "none", "gemini": "low"}
 # Backup models on the same free tier, for when the main one returns "high demand".
-DEFAULT_FALLBACKS = {"gemini": ("gemini-2.5-flash", "gemini-3.8-flash")}
+# (gemini-2.5-flash answered 404 on the OpenAI-compatible endpoint, Oct 2026.)
+DEFAULT_FALLBACKS = {"gemini": ("gemini-3.8-flash", "gemini-3.5-flash-lite")}
 TRANSIENT_HTTP = {408, 429, 500, 502, 503, 504}
+# 404 is about one model (retired or renamed), not the request: the next model may work.
+NEXT_MODEL_HTTP = TRANSIENT_HTTP | {404}
 
 
 class ProviderError(RuntimeError):
-    def __init__(self, message: str, *, transient: bool = False) -> None:
+    def __init__(self, message: str, *, transient: bool = False, next_model: bool | None = None):
         super().__init__(message)
         self.transient = transient
+        self.next_model = transient if next_model is None else next_model  # worth another model
 
 
 @dataclass(frozen=True)
@@ -65,7 +69,7 @@ class ChatProvider:
     api_key: str | None = None
     timeout_s: float = 60.0
     reasoning: str | None = None
-    # Tried in order when the main model is overloaded or down (429, 5xx, timeout); free
+    # Tried in order when a model is overloaded, down or gone (429, 5xx, timeout, 404); free
     # tiers see "high demand" 503s at peak hours. A bad key or request fails at once.
     fallback_models: tuple[str, ...] = ()
 
@@ -76,16 +80,15 @@ class ChatProvider:
         temperature: float = 0.2,
         max_tokens: int = 1500,
     ) -> Completion:
-        error: ProviderError | None = None
+        failures: list[ProviderError] = []
         for model in (self.model, *self.fallback_models):
             try:
                 return self._call(model, messages, temperature, max_tokens)
             except ProviderError as failure:
-                if not failure.transient:
-                    raise
-                error = failure
-        assert error is not None
-        raise error
+                failures.append(failure)
+                if not failure.next_model:
+                    break
+        raise ProviderError(" | ".join(str(f) for f in failures), transient=failures[-1].transient)
 
     def _call(
         self,
@@ -120,6 +123,7 @@ class ChatProvider:
             raise ProviderError(
                 f"{self.name} {model} returned HTTP {error.code}: {detail}",
                 transient=error.code in TRANSIENT_HTTP,
+                next_model=error.code in NEXT_MODEL_HTTP,
             ) from error
         except (urllib.error.URLError, TimeoutError, OSError) as error:
             raise ProviderError(f"{self.name} unreachable: {error}", transient=True) from error
