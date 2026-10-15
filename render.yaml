@@ -11,7 +11,9 @@ services:
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /healthz
-    autoDeployTrigger: checksPass  # deploy only after GitHub Actions CI passes
+    # Deploy only after GitHub Actions CI passes. Render never auto-deploys a commit with zero
+    # checks, so enable Actions on the fork first (or use `commit` to deploy on every push).
+    autoDeployTrigger: checksPass
     envVars:
       - key: SAFETY_RUNS_REPO  # Hugging Face dataset with published runs
         sync: false

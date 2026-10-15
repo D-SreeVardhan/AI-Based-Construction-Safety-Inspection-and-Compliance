@@ -52,6 +52,9 @@ the chatbot on its own.
 
 You need the fork pushed to GitHub with the `feat/cv-pipeline` branch, and about 30 minutes.
 
+0. **Turn on CI for the fork.** GitHub keeps workflows off on forks. Open the fork's **Actions** tab and click
+   *I understand my workflows, go ahead and enable them*, then re-run or push once. Render deploys a commit only
+   after its checks pass, and a commit with no checks is never auto-deployed.
 1. **Publish the runs (Hugging Face, free).**
    1. Sign up at huggingface.co. Under *Settings → Access Tokens*, create a **Write** token.
    2. Run:
