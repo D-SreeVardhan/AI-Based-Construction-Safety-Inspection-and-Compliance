@@ -7,7 +7,7 @@ from rule_frames import frame, rules_config, times, worker
 
 from pipeline.rules.engine import RuleEngine
 from pipeline.rules.r6 import R6WorkerDown
-from pipeline.rules.r7 import R7SuspendedLoad
+from pipeline.rules.r7 import R7SuspendedLoad, plausible_load
 from pipeline.rules.r8 import R8FireSmoke
 from pipeline.vision.posture import decide, lying_from_keypoints, posture_from_box
 from shared.coordinates import Box2
@@ -122,6 +122,17 @@ def test_r7_without_a_confident_load_is_not_applicable() -> None:
     assert [r.status for r in result] == [RuleStatus.NOT_APPLICABLE]
     no_class = rule.evaluate(frame(1.0, tracks=(_worker(1),), hazards=(weak,)))
     assert no_class[0].status is RuleStatus.UNSUPPORTED
+
+
+def test_r7_ignores_mast_like_detections() -> None:
+    mast = _hazard("shot:s0/track:12", "suspended_load", (1055, 0, 1186, 473), 0.67)  # SARD 9
+    column = _hazard("m", "suspended_load", (500, 50, 540, 300))  # tall and thin
+    load = _hazard("l", "suspended_load", (400, 100, 480, 160))  # compact, below the top
+    assert not plausible_load(mast) and not plausible_load(column) and plausible_load(load)
+    rule = R7SuspendedLoad(basis="heuristic", min_confidence=0.35)
+    under_mast = _worker(1, box=(1080, 500, 1120, 620))
+    result = rule.evaluate(frame(1.0, capabilities=CAPS, tracks=(under_mast,), hazards=(mast,)))
+    assert [r.status for r in result] == [RuleStatus.NOT_APPLICABLE]
 
 
 # ---------------------------------------------------------------------- R8

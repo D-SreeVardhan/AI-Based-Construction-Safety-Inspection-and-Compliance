@@ -7,6 +7,11 @@ deliberately generous: a worker whose box overlaps the load's horizontal extent 
 by `SIDE_MARGIN` either side, since loads swing) and who stands below it in the frame,
 within `MAX_DROP_HEIGHTS` load heights. Heuristic by design; the evidence grade and the
 review loop catch the cases perspective gets wrong.
+
+A detection only counts as a load if it looks like one: it hangs below its cable, so it is
+not cut off by the top of the frame, and it is compact, not a tall column. On SARD 9 the
+open-vocabulary detector labels the tower-crane mast "suspended load" in every frame;
+these two checks reject it without touching real loads.
 """
 
 from __future__ import annotations
@@ -20,6 +25,14 @@ ALERT_REASON = "worker_under_suspended_load"
 LOAD_CLASS = "suspended_load"
 SIDE_MARGIN = 0.25  # of the load's width
 MAX_DROP_HEIGHTS = 8.0
+TOP_EDGE_PX = 3.0
+MAX_LOAD_ASPECT = 2.2  # height / width; masts and columns are taller
+
+
+def plausible_load(load: HazardObject) -> bool:
+    b = load.box_reference
+    width, height = b.x2 - b.x1, b.y2 - b.y1
+    return b.y1 > TOP_EDGE_PX and width > 0 and height / width <= MAX_LOAD_ASPECT
 
 
 def beneath(worker_box, load: HazardObject) -> bool:
@@ -46,7 +59,9 @@ class R7SuspendedLoad:
         loads = [
             h
             for h in context.hazards
-            if h.class_name == LOAD_CLASS and (h.confidence or 0.0) >= self.min_confidence
+            if h.class_name == LOAD_CLASS
+            and (h.confidence or 0.0) >= self.min_confidence
+            and plausible_load(h)
         ]
         if not loads:
             return make.frame(RuleStatus.NOT_APPLICABLE, "no_suspended_load_observed")
