@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, "feat/**"]  # Render deploys feat/cv-pipeline once these pass
   pull_request:
 
 jobs:
