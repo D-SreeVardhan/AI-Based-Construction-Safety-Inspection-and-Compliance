@@ -30,6 +30,8 @@ from shared.schemas.run import RunManifest
 from tools.label_ppe import Sample, raw_box
 
 MIN_HEIGHT_PX = 60.0
+# The temporal PPE filter needs a few observations: early `unknown`s are warm-up, not doubt.
+WARM_UP_S = 1.0
 PER_TRACK = 2
 PAD = 0.25
 
@@ -67,10 +69,14 @@ def main() -> None:
     store = Pass1Store(Path(manifest.diagnostics["work_dir"]) / "pass1.sqlite")
     candidates = defaultdict(list)
     frame_observations = {}
+    first_seen: dict[str, float] = {}
     for record, observations in store.frames_with_observations():
         frame_observations[record.frame_index] = observations
         for o in observations:
             if o.object_class != PERSON_CLASS:
+                continue
+            first_seen.setdefault(o.canonical_track_id, o.video_time_s)
+            if o.video_time_s - first_seen[o.canonical_track_id] < WARM_UP_S:
                 continue
             score = ambiguity(o, floor, args.margin)
             if score is not None:
