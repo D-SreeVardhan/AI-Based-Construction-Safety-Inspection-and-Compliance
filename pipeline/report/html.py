@@ -391,6 +391,7 @@ def _incidents_page(
         "Most severe and best-evidenced first. Select one to see its clip, why it fired and what "
         "to do; mark it real or a false alarm to measure precision.",
         actions=(
+            '<span class="muted small" id="team-review" hidden></span>'
             '<span class="muted small" data-review-count></span>'
             '<button class="btn" id="export-review" type="button">Export review</button>'
         ),

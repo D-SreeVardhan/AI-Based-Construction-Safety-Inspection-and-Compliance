@@ -86,10 +86,31 @@ def test_chat_answers_from_the_register_and_is_rate_limited(client: TestClient) 
 
 def test_chat_rejects_bad_input_and_reviews_need_a_database(client: TestClient) -> None:
     assert client.post("/api/runs/run-cloud/chat", json={"question": ""}).status_code == 422
-    review = {"incident_id": "x", "verdict": "real"}
+    review = {"incident_id": "x", "verdict": "real", "reviewer": "Asha"}
     assert client.post("/api/runs/run-cloud/reviews", json=review).status_code == 503
-    bad = {"incident_id": "x", "verdict": "maybe"}
-    assert client.post("/api/runs/run-cloud/reviews", json=bad).status_code == 422
+    for bad in (
+        {"incident_id": "x", "verdict": "maybe", "reviewer": "Asha"},
+        {"incident_id": "x", "verdict": "real"},  # a verdict needs a reviewer
+        {"incident_id": "x", "verdict": "real", "reviewer": "<script>"},
+    ):
+        assert client.post("/api/runs/run-cloud/reviews", json=bad).status_code == 422
+
+
+def test_team_review_summary(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    import app.cloud as cloud
+
+    stored: list[dict] = []
+    monkeypatch.setenv("SUPABASE_URL", "https://example.invalid")
+    monkeypatch.setattr(cloud, "supabase_insert", lambda table, r: stored.append(r))
+    monkeypatch.setattr(cloud, "fetch_supabase", lambda run_id: stored)
+    [incident] = client.get("/api/runs/run-cloud/risk").json()["rows"][0]["incidents"]
+    for n, (name, verdict) in enumerate((("Asha", "real"), ("Ben", "real"))):
+        body = {"incident_id": incident, "verdict": verdict, "reviewer": f" {name} "}
+        assert client.post("/api/runs/run-cloud/reviews", json=body).status_code == 200
+        stored[-1] |= {"id": n, "created_at": f"2026-10-15T00:00:0{n}Z"}
+    assert stored[0]["reviewer"] == "Asha" and stored[0]["run_id"] == "run-cloud"
+    summary = client.get("/api/runs/run-cloud/reviews").json()
+    assert summary["reviewers"] == 2 and summary["decided"] == 1 and summary["precision"] == 1.0
 
 
 def test_runs_dir_is_configurable(tmp_path: Path) -> None:

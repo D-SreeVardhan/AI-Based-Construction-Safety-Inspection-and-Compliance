@@ -27,8 +27,11 @@ create table if not exists public.incident_reviews (
   run_id text not null,
   incident_id text not null,
   verdict text not null check (verdict in ('real', 'false_alarm', 'unsure')),
-  reason text
+  reason text,
+  reviewer text                       -- self-declared name; SAFETY_REVIEWERS limits who counts
 );
+-- Projects created before the reviewer column existed: run this once.
+alter table public.incident_reviews add column if not exists reviewer text;
 
 alter table public.chat_logs enable row level security;
 alter table public.incident_reviews enable row level security;
@@ -43,6 +46,9 @@ select date_trunc('day', created_at) as day,
        count(*) filter (where jsonb_array_length(failures) > 0) as answers_with_failed_checks
 from public.chat_logs group by 1 order by 1 desc;
 
--- Precision per rule from reviewers' verdicts (join incident ids to rules in the bundle).
-create or replace view public.review_summary as
-select run_id, verdict, count(*) as n from public.incident_reviews group by 1, 2 order by 1, 2;
+-- Verdict counts per run and reviewer. Precision per rule and agreement (kappa) need the
+-- bundle's incident rules: `python -m evaluation.reviews output/<run>` or GET /api/runs/<id>/reviews.
+drop view if exists public.review_summary;  -- its columns changed; replace cannot do that
+create view public.review_summary as
+select run_id, reviewer, verdict, count(*) as n from public.incident_reviews
+group by 1, 2, 3 order by 1, 2, 3;

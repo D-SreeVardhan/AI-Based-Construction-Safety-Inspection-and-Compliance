@@ -6,7 +6,8 @@
     GET  /api/runs                  published runs: clip, duration, incidents, top risk
     GET  /api/runs/{run_id}/risk    the risk register as JSON
     POST /api/runs/{run_id}/chat    {question, history} -> a grounded, checked answer
-    POST /api/runs/{run_id}/reviews reviewer verdicts (stored when a database is configured)
+    POST /api/runs/{run_id}/reviews a reviewer's verdict (stored when a database is configured)
+    GET  /api/runs/{run_id}/reviews team precision per rule and reviewer agreement (kappa)
     GET  /api/stats                 chatbot monitoring: answers, model share, latency, failures
     GET  /healthz                   liveness and configuration (never secrets)
     GET  /docs                      OpenAPI
@@ -23,6 +24,7 @@ Configuration, all from the environment (cloud secrets; never committed):
     SAFETY_LLM_*             the chatbot's model (llm/assistant/providers.py)
     SUPABASE_URL, SUPABASE_SERVICE_KEY   optional: chat logs and reviews in Postgres
     SAFETY_CHAT_PER_MINUTE   per-client limit on chat requests (default 8)
+    SAFETY_REVIEWERS         optional: only these reviewers' verdicts count (comma-separated)
 """
 
 from __future__ import annotations
@@ -47,6 +49,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
+from evaluation.reviews import allowed_reviewers, fetch_supabase, summarize
 from llm.assistant.chat import RiskAssistant
 from llm.assistant.providers import ProviderError, from_env
 from pipeline.output.run_bundle import RunBundle
@@ -212,6 +215,8 @@ except ProviderError as error:  # misconfigured: run, but answer from the regist
     provider = None
 stats = Stats()
 limiter = Limiter(int(os.environ.get("SAFETY_CHAT_PER_MINUTE") or 8))
+review_limiter = Limiter(60)
+_review_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
 
 def _startup() -> None:
@@ -263,6 +268,8 @@ class Review(BaseModel):
     incident_id: str = Field(max_length=120)
     verdict: str = Field(pattern="^(real|false_alarm|unsure)$")
     reason: str | None = Field(default=None, max_length=60)
+    # Self-declared; SAFETY_REVIEWERS limits whose verdicts count (evaluation/reviews.py).
+    reviewer: str = Field(min_length=1, max_length=40, pattern=r"^[\w .'-]+$")
 
 
 @app.get("/healthz")
@@ -372,12 +379,37 @@ def chat(run_id: str, body: ChatRequest, request: Request) -> JSONResponse:
 
 
 @app.post("/api/runs/{run_id}/reviews")
-def review(run_id: str, body: Review) -> dict[str, str]:
+def review(run_id: str, body: Review, request: Request) -> dict[str, str]:
     store.path(run_id)
     if not os.environ.get("SUPABASE_URL"):
         raise HTTPException(503, "reviews are kept in the browser; no database is configured")
-    supabase_insert("incident_reviews", {"run_id": run_id, **body.model_dump()})
+    if not review_limiter.allow(_client(request)):
+        raise HTTPException(429, "too many reviews; try again in a minute")
+    row = body.model_dump() | {"reviewer": body.reviewer.strip()}
+    supabase_insert("incident_reviews", {"run_id": run_id, **row})
+    _review_cache.pop(run_id, None)
     return {"status": "stored"}
+
+
+@app.get("/api/runs/{run_id}/reviews")
+def review_summary(run_id: str) -> dict[str, Any]:
+    """Team precision per rule and reviewer agreement (evaluation/reviews.py), 60 s cache."""
+    incidents = store.assistant(run_id).bundle.incidents
+    if not os.environ.get("SUPABASE_URL"):
+        raise HTTPException(503, "no database is configured")
+    cached = _review_cache.get(run_id)
+    if cached and time.time() - cached[0] < 60:
+        return cached[1]
+    try:
+        rows = fetch_supabase(run_id)
+    except (OSError, RuntimeError, ValueError) as error:
+        log.warning(json.dumps({"event": "reviews_fetch_failed", "error": str(error)}))
+        raise HTTPException(502, "reviews are unavailable right now") from error
+    summary = summarize(
+        rows, {i.incident_id: i.rule_id.value for i in incidents}, allowed=allowed_reviewers()
+    )
+    _review_cache[run_id] = (time.time(), summary)
+    return summary
 
 
 @app.get("/api/stats")

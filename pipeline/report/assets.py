@@ -283,6 +283,7 @@ if (rows.length) select(rows[0].dataset.id);
 
 // ---- human review (stored in this browser; exported for tools/review_incidents.py)
 const key = 'safety-review:' + runId;
+const reviewApi = document.querySelector('meta[name="safety-api"]');  // set when served by app/cloud.py
 let verdicts = {};
 try { verdicts = JSON.parse(localStorage.getItem(key) || '{}'); } catch (e) { verdicts = {}; }
 function paint() {
@@ -303,11 +304,37 @@ $$('.review').forEach(box => $$('[data-verdict]', box).forEach(b => b.addEventLi
   if (b.dataset.reason) entry.reason = b.dataset.reason;
   verdicts[box.dataset.id] = entry;
   try { localStorage.setItem(key, JSON.stringify(verdicts)); } catch (e) {}
-  const api = document.querySelector('meta[name="safety-api"]');  // hosted: also store centrally
-  if (api) fetch(api.content + '/reviews', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ incident_id: box.dataset.id, ...entry }) }).catch(() => {});
+  if (reviewApi) {  // hosted: also store centrally, under the reviewer's name
+    const name = reviewer();
+    if (name) fetch(reviewApi.content + '/reviews', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ incident_id: box.dataset.id, ...entry, reviewer: name }) })
+      .then(() => setTimeout(team, 1500)).catch(() => {});
+  }
   paint();
 })));
+function reviewer() {
+  let name = '';
+  try { name = localStorage.getItem('safety-reviewer') || ''; } catch (e) {}
+  if (!name) {
+    name = (window.prompt('Your name, so your reviews count in the team precision:') || '')
+      .replace(/[^A-Za-z0-9_ .'-]/g, '').trim().slice(0, 40);
+    if (name) { try { localStorage.setItem('safety-reviewer', name); } catch (e) {} }
+  }
+  return name;
+}
+function team() {  // team precision and agreement, from every reviewer's verdicts
+  const el = $('#team-review');
+  if (!reviewApi || !el) return;
+  fetch(reviewApi.content + '/reviews').then(r => r.ok ? r.json() : null).then(s => {
+    if (!s || !s.reviewers) return;
+    const k = s.agreement.mean_kappa;
+    el.textContent = 'Team: ' + s.reviewers + (s.reviewers > 1 ? ' reviewers' : ' reviewer') + ', '
+      + s.decided + ' decided, precision ' + (s.precision == null ? 'n/a' : Math.round(100 * s.precision) + '%')
+      + (k == null ? '' : ', agreement kappa ' + k.toFixed(2));
+    el.hidden = false;
+  }).catch(() => {});
+}
+team();
 const exportButton = $('#export-review');
 if (exportButton) exportButton.addEventListener('click', () => {
   const lines = Object.entries(verdicts).map(([id, v]) => JSON.stringify({ run_id: runId, incident_id: id, ...v })).join('\\n');
